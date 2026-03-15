@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 import re
 
 # ------------------------
-# 0 隊名對照表 (用於標註中文)
+# 0 隊名與 2026 核心球員庫
 # ------------------------
 TEAM_CN = {
     "Atlanta Hawks": "老鷹", "Boston Celtics": "塞爾提克", "Brooklyn Nets": "籃網",
@@ -23,127 +23,138 @@ TEAM_CN = {
     "Toronto Raptors": "暴龍", "Utah Jazz": "爵士", "Washington Wizards": "巫師"
 }
 
-# ------------------------
-# 1 傷兵解析模組 (V8 邏輯回歸)
-# ------------------------
+# 補強後的核心監控名單
 STAR_PLAYERS = {
-    "Lakers": ["LeBron James", "Anthony Davis"], "Nuggets": ["Nikola Jokic", "Jamal Murray"],
-    "Celtics": ["Jayson Tatum", "Jaylen Brown"], "Clippers": ["Kawhi Leonard", "James Harden"],
-    "76ers": ["Joel Embiid", "Tyrese Maxey"], "Spurs": ["Victor Wembanyama"],
-    "Warriors": ["Stephen Curry"], "Mavericks": ["Luka Doncic", "Kyrie Irving"]
+    "Lakers": ["LeBron James", "Anthony Davis"],
+    "Nuggets": ["Nikola Jokic", "Jamal Murray"],
+    "Celtics": ["Jayson Tatum", "Jaylen Brown"],
+    "Mavericks": ["Luka Doncic", "Kyrie Irving"],
+    "Thunder": ["Shai Gilgeous-Alexander", "Chet Holmgren"],
+    "Timberwolves": ["Anthony Edwards", "Rudy Gobert"],
+    "Bucks": ["Giannis Antetokounmpo", "Damian Lillard"],
+    "Suns": ["Kevin Durant", "Devin Booker"],
+    "Warriors": ["Stephen Curry"],
+    "Spurs": ["Victor Wembanyama"],
+    "Sixers": ["Joel Embiid", "Tyrese Maxey"],
+    "Cavaliers": ["Donovan Mitchell"]
 }
 
-@st.cache_data(ttl=900)
-def fetch_injury_report():
-    try:
-        url = "https://www.cbssports.com/nba/injuries/"
-        res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
-        return res.text.lower()
-    except: return ""
+# ------------------------
+# 1 強化版傷兵爬蟲 (Scraper 升級)
+# ------------------------
+@st.cache_data(ttl=600)
+def fetch_injury_raw():
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
+    urls = [
+        "https://www.cbssports.com/nba/injuries/",
+        "https://www.espn.com/nba/injuries"
+    ]
+    all_text = ""
+    for url in urls:
+        try:
+            r = requests.get(url, headers=headers, timeout=10)
+            soup = BeautifulSoup(r.text, 'html.parser')
+            # 抓取包含球員表格的區塊
+            all_text += soup.get_text(separator=' ', strip=True).lower()
+        except: continue
+    return all_text
 
-def analyze_injuries(team_name, injury_text):
+def get_injury_impact(team_name, raw_text):
     mascot = team_name.split()[-1]
     penalty, reports, has_gtd = 0, [], False
-    if mascot in STAR_PLAYERS:
-        for player in STAR_PLAYERS[mascot]:
+    
+    # 特殊處理 76人 (API 與網頁簡稱可能不同)
+    search_key = "76ers" if mascot == "76ers" else mascot
+    
+    if search_key in STAR_PLAYERS:
+        for player in STAR_PLAYERS[search_key]:
+            # 搜尋姓氏以提高命中率
             last_name = player.split()[-1].lower()
-            if last_name in injury_text:
-                idx = injury_text.find(last_name)
-                context = injury_text[idx:idx+120]
-                if "out" in context:
-                    penalty += 8.0; reports.append(f"🚨 {player} (確定缺陣 Out)")
-                elif "questionable" in context or "gtd" in context:
-                    penalty += 4.0; reports.append(f"⚠️ {player} (出戰成疑 GTD)"); has_gtd = True
+            if last_name in raw_text:
+                # 擷取名字後方 150 字元進行狀態判定
+                idx = raw_text.find(last_name)
+                chunk = raw_text[idx:idx+150]
+                
+                if "out" in chunk or "expected to be out" in chunk:
+                    penalty += 8.0
+                    reports.append(f"🚨 {player} [確定缺陣 Out]")
+                elif any(word in chunk for word in ["questionable", "gtd", "day-to-day", "decision"]):
+                    penalty += 4.0
+                    reports.append(f"⚠️ {player} [出戰成疑 Questionable]")
+                    has_gtd = True
+                elif "probable" in chunk:
+                    reports.append(f"✅ {player} [大概率出戰 Probable]")
     return penalty, reports, has_gtd
 
 # ------------------------
 # 2 數據引擎
 # ------------------------
 @st.cache_data(ttl=3600)
-def fetch_master_data():
+def fetch_nba_master():
     team_dict = {t["id"]: t["full_name"] for t in teams.get_teams()}
+    games = scoreboardv2.ScoreboardV2().get_data_frames()[0]
     s_h = leaguedashteamstats.LeagueDashTeamStats(measure_type_detailed_defense="Advanced", location_nullable="Home").get_data_frames()[0]
     s_a = leaguedashteamstats.LeagueDashTeamStats(measure_type_detailed_defense="Advanced", location_nullable="Road").get_data_frames()[0]
-    p_stats = leaguedashplayerstats.LeagueDashPlayerStats(measure_type_detailed_defense="Advanced").get_data_frames()[0]
-    games = scoreboardv2.ScoreboardV2().get_data_frames()[0]
-    return team_dict, games, s_h, s_a, p_stats
+    return team_dict, games, s_h, s_a
 
 # ------------------------
-# 3 主程式 UI
+# 3 主 UI 流程
 # ------------------------
-st.set_page_config(page_title="NBA AI 終極版 V20.0", page_icon="🏀", layout="wide")
-st.title("🏀 NBA AI 終極實戰 V20.0 (傷兵全解析 + 賠率決策)")
+st.set_page_config(page_title="NBA AI 實戰 V20.1", page_icon="🏀", layout="wide")
+st.title("🏀 NBA AI 終極實戰 V20.1 (傷兵偵測修正版)")
 
-with st.spinner("同步數據與解析最新傷兵情報..."):
-    team_dict, games, s_h, s_a, p_stats = fetch_master_data()
-    injury_raw = fetch_injury_report()
+with st.spinner("正在掃描各大體育台傷兵報告..."):
+    t_dict, games_df, s_h, s_a = fetch_nba_master()
+    raw_inj = fetch_injury_raw()
 
-if games.empty:
+# 診斷模式：顯示抓取的文字片段 (確認爬蟲有沒有活著)
+with st.expander("🛠️ 傷兵爬蟲診斷數據 (點開確認)"):
+    if len(raw_inj) > 100:
+        st.write("✅ 成功抓取傷兵報告文字。")
+        st.text(raw_inj[:500] + "...")
+    else:
+        st.error("❌ 爬蟲未抓到文字，請檢查網路。")
+
+if games_df.empty:
     st.info("今日暫無賽程。")
 else:
-    matchups = []
-    for _, row in games.iterrows():
-        h_n, a_n = team_dict.get(row["HOME_TEAM_ID"]), team_dict.get(row["VISITOR_TEAM_ID"])
-        h_d = s_h[s_h["TEAM_NAME"] == h_n].iloc[0]
-        a_d = s_a[s_a["TEAM_NAME"] == a_n].iloc[0]
+    match_list = []
+    for _, row in games_df.iterrows():
+        h_n = t_dict.get(row["HOME_TEAM_ID"])
+        a_n = t_dict.get(row["VISITOR_TEAM_ID"])
         
-        # 傷兵修正
-        h_pen, h_rep, h_gtd = analyze_injuries(h_n, injury_raw)
-        a_pen, a_rep, a_gtd = analyze_injuries(a_n, injury_raw)
+        # 抓取雙方數據與傷兵
+        h_pen, h_rep, h_gtd = get_injury_impact(h_n, raw_inj)
+        a_pen, a_rep, a_gtd = get_injury_impact(a_n, raw_inj)
         
-        # 預測模型 (Net Rating 加權)
-        pace = (h_d["PACE"] + a_d["PACE"]) / 2
-        h_s = (h_d["OFF_RATING"] * (pace/100) * (110/a_d["DEF_RATING"])) + 2.5 - h_pen
-        a_s = (a_d["OFF_RATING"] * (pace/100) * (110/h_d["DEF_RATING"])) - a_pen
+        # 簡單模型 (主客分離)
+        h_data = s_h[s_h["TEAM_NAME"] == h_n].iloc[0]
+        a_data = s_a[s_a["TEAM_NAME"] == a_n].iloc[0]
+        h_score = (h_data["OFF_RATING"] * (h_data["PACE"]/100)) + 2.5 - h_pen
+        a_score = (a_data["OFF_RATING"] * (a_data["PACE"]/100)) - a_pen
         
-        matchups.append({
+        match_list.append({
             "label": f"{a_n} ({TEAM_CN.get(a_n)}) @ {h_n} ({TEAM_CN.get(h_n)})",
-            "h_n": h_n, "a_n": a_n, "h_s": h_s, "a_s": a_s, "h_rep": h_rep, "a_rep": a_rep, "gtd": h_gtd or a_gtd
+            "h_n": h_n, "a_n": a_n, "h_s": h_score, "a_s": a_score,
+            "reports": h_rep + a_rep, "gtd": h_gtd or a_gtd
         })
 
-    selected = st.selectbox("選擇比賽深度分析", matchups, format_func=lambda x: x["label"])
+    selected = st.selectbox("選擇比賽深度分析", match_list, format_func=lambda x: x["label"])
 
     # 儀表板
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric(f"🏠 {selected['h_n']} ({TEAM_CN.get(selected['h_n'])})", f"{selected['h_s']:.1f}")
-        for r in selected['h_rep']: st.error(r)
-    with col2:
-        st.markdown(f"<h3 style='text-align:center;'>讓分: {selected['h_s']-selected['a_s']:.1f}<br>總分: {selected['h_s']+selected['a_s']:.1f}</h3>", unsafe_allow_html=True)
-    with col3:
-        st.metric(f"✈️ {selected['a_n']} ({TEAM_CN.get(selected['a_n'])})", f"{selected['a_s']:.1f}")
-        for r in selected['a_rep']: st.error(r)
-
-    # 避雷與提示
-    if selected['gtd']:
-        st.error("⚠️ 【高變異警告】此場核心主力為「出戰成疑」，明早可能不打。若要今晚下注，請務必注碼減半。")
-    elif not selected['h_rep'] and not selected['a_rep']:
-        st.success("🛡️ 【陣容穩定】目前無重大傷勢疑慮，適合當作串關主力。")
-
-    # --- 💰 台彩盤口實戰輸入 ---
-    st.divider()
-    st.subheader("📝 運彩盤口輸入與下注建議")
     c1, c2, c3 = st.columns(3)
-    with c1:
-        u_ml_h = st.number_input("不讓分賠率 (主勝)", value=1.50)
-        u_ml_a = st.number_input("不讓分賠率 (客勝)", value=2.20)
-    with c2:
-        u_spread = st.number_input("主隊讓分值 (如 -5.5)", value=-5.5, step=0.5)
-    with c3:
-        u_total = st.number_input("大小分分界點", value=220.5, step=0.5)
-        u_odd_over = st.number_input("大分賠率", value=1.75)
-        u_odd_under = st.number_input("小分賠率", value=1.75)
+    with c1: st.metric(f"🏠 {selected['h_n']}", f"{selected['h_s']:.1f}")
+    with c2: st.markdown(f"<h3 style='text-align:center;'>預測讓分: {selected['h_s']-selected['a_s']:.1f}</h3>", unsafe_allow_html=True)
+    with c3: st.metric(f"✈️ {selected['a_n']}", f"{selected['a_s']:.1f}")
 
-    # --- 🎯 決策建議 ---
+    # 顯示分析結果
     st.divider()
-    edge_s = (selected['h_s'] - selected['a_s']) - u_spread
-    if abs(edge_s) >= 4.5:
-        st.success(f"🔥 【強推建議】AI 預測讓分與盤口誤差達 {abs(edge_s):.1f}，看好 {'主隊過盤' if edge_s > 0 else '客隊受讓'}。")
-    
-    # 受讓極限偵測
-    if u_spread < -15 or u_spread > 15:
-        st.warning(f"🛡️ 【受讓極限】盤口開出 {u_spread}。若 AI 預測分差沒這麼大，反打受讓更有獲利空間。")
-
-    # 串關戰略提示
-    if not selected['gtd'] and abs(edge_s) > 3.0:
-        st.info(f"🎯 **串關戰略**：本場無 GTD 變數且 Edge 穩定，建議可串 **{'讓分' if u_ml_h > 0 else '不讓分'}** 以提升獲利。")
+    if selected["reports"]:
+        st.subheader("📋 傷兵影響分析")
+        for r in selected["reports"]:
+            if "🚨" in r: st.error(r)
+            else: st.warning(r)
+        if selected["gtd"]:
+            st.info("💡 提醒：有核心處於成疑狀態，建議明天開賽前再確認盤口。")
+    else:
+        st.success("✅ 目前該場次核心主力均無傷兵紀錄 (或尚未更新)。")
