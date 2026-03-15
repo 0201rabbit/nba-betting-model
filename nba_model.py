@@ -239,10 +239,16 @@ else:
     ai_spread = selected['h_s'] - selected['a_s']
     edge = ai_spread - u_spread
     
+    # 自動判斷名詞邏輯
+    if edge > 0:
+        action_text = "主隊讓分過盤" if u_spread <= 0 else "主隊受讓過盤"
+    else:
+        action_text = "客隊受讓過盤" if u_spread <= 0 else "客隊讓分過盤"
+
     if abs(edge) >= 4.5:
-        st.success(f"🔥 【重注建議】預測分差與盤口誤差達 {abs(edge):.1f} 分，適合攻擊 **{'主隊過盤' if edge > 0 else '客隊受讓'}**。")
+        st.success(f"🔥 【重注建議】預測分差與盤口誤差達 {abs(edge):.1f} 分，適合攻擊 **{action_text}**。")
     elif abs(edge) >= 2.5:
-        st.info(f"✅ 【小注建議】建議關注 **{'主隊' if edge > 0 else '客隊'}**。")
+        st.info(f"✅ 【小注建議】建議關注 **{action_text}**。")
     else:
         st.warning("⚖️ 【建議觀望】盤口與 AI 預測接近，建議轉為串關副選或避開。")
     
