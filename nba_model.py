@@ -5,10 +5,9 @@ from bs4 import BeautifulSoup
 from nba_api.stats.endpoints import leaguedashteamstats, scoreboardv2, leaguedashplayerstats
 from nba_api.stats.static import teams
 from datetime import datetime, timedelta
-import re
 
 # ------------------------
-# 0 隊名與 2026 核心球員庫
+# 0 隊名與核心球員庫
 # ------------------------
 TEAM_CN = {
     "Atlanta Hawks": "老鷹", "Boston Celtics": "塞爾提克", "Brooklyn Nets": "籃網",
@@ -73,12 +72,28 @@ def fetch_nba_master():
     return team_dict, games, s_h, s_a, p_stats
 
 # ------------------------
-# 2 主介面
+# 2 智能玩法推薦器
 # ------------------------
-st.set_page_config(page_title="NBA AI 終極實戰 V21.0", page_icon="🏀", layout="wide")
-st.title("🏀 NBA AI 終極實戰 V21.0")
+def get_bet_recommendation(h_score, a_score):
+    spread = h_score - a_score
+    total = h_score + a_score
+    
+    if abs(spread) > 9.0:
+        return f"[不讓分] {'主勝' if spread > 0 else '客勝'}"
+    elif total > 233.0:
+        return "[大小分] 大分"
+    elif total < 212.0:
+        return "[大小分] 小分"
+    else:
+        return f"[讓分] {'主隊' if spread > 0 else '客隊'}"
 
-with st.spinner("同步 NBA 數據與最新傷兵名單..."):
+# ------------------------
+# 3 主介面
+# ------------------------
+st.set_page_config(page_title="NBA AI 終極實戰 V21.1", page_icon="🏀", layout="wide")
+st.title("🏀 NBA AI 終極實戰 V21.1 (串關攻略回歸)")
+
+with st.spinner("同步 NBA 數據、最新傷兵名單與對位優勢..."):
     t_dict, games_df, s_h, s_a, p_stats = fetch_nba_master()
     raw_inj = fetch_injury_raw()
 
@@ -90,16 +105,13 @@ else:
         h_n = t_dict.get(row["HOME_TEAM_ID"])
         a_n = t_dict.get(row["VISITOR_TEAM_ID"])
         
-        # 傷兵解析
         h_pen, h_rep, h_gtd = get_injury_impact(h_n, raw_inj)
         a_pen, a_rep, a_gtd = get_injury_impact(a_n, raw_inj)
         
-        # 主客場分離模型
         try:
             h_data = s_h[s_h["TEAM_NAME"] == h_n].iloc[0]
             a_data = s_a[s_a["TEAM_NAME"] == a_n].iloc[0]
             
-            # 對位統治力加成
             h_abb = "".join([i[0] for i in h_n.split() if i[0].isupper()])
             a_abb = "".join([i[0] for i in a_n.split() if i[0].isupper()])
             h_pie = p_stats[p_stats["TEAM_ABBREVIATION"] == h_abb]["PIE"].max()
@@ -113,20 +125,53 @@ else:
             match_list.append({
                 "label": f"{a_n} ({TEAM_CN.get(a_n, '未知')}) @ {h_n} ({TEAM_CN.get(h_n, '未知')})",
                 "h_n": h_n, "a_n": a_n, "h_s": h_score, "a_s": a_score,
-                "reports": h_rep + a_rep, "gtd": h_gtd or a_gtd
+                "reports": h_rep + a_rep, "gtd": h_gtd or a_gtd,
+                "rec_play": get_bet_recommendation(h_score, a_score)
             })
         except: continue
 
+    # --- 🎯 串關全攻略面板 (強勢回歸) ---
+    st.divider()
+    st.header("🎯 AI 智能串關攻略看板")
+    
+    # 嚴格篩選：排除有 GTD (出戰成疑) 的地雷比賽，並按預測分差絕對值排序 (越懸殊越穩)
+    safe_games = [m for m in match_list if not m["gtd"]]
+    safe_games = sorted(safe_games, key=lambda x: abs(x["h_s"] - x["a_s"]), reverse=True)
+    
+    if len(safe_games) >= 3:
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.success("🔥 【首選 2 串 1】(最穩避雷組合)")
+            st.write(f"1. **{safe_games[0]['label']}**")
+            st.write(f"   👉 建議玩法：**{safe_games[0]['rec_play']}**")
+            st.write(f"2. **{safe_games[1]['label']}**")
+            st.write(f"   👉 建議玩法：**{safe_games[1]['rec_play']}**")
+            
+        with c2:
+            st.info("🚀 【高賠 3 串 1】(要求 3 關專用)")
+            st.write(f"1. {safe_games[0]['label']} ({safe_games[0]['rec_play']})")
+            st.write(f"2. {safe_games[1]['label']} ({safe_games[1]['rec_play']})")
+            st.write(f"3. {safe_games[2]['label']} ({safe_games[2]['rec_play']})")
+            
+        with c3:
+            st.warning("🛡️ 【鎖盤 / 變盤備案專區】")
+            st.write("若上方推薦的賽事遭遇運彩鎖盤，請優先替換：")
+            if len(safe_games) >= 4:
+                st.write(f"🔹 備案 A: {safe_games[3]['label']} -> **{safe_games[3]['rec_play']}**")
+            if len(safe_games) >= 5:
+                st.write(f"🔹 備案 B: {safe_games[4]['label']} -> **{safe_games[4]['rec_play']}**")
+    else:
+        st.warning("⚠️ 今日無足夠安全的比賽進行串關推薦 (多數比賽存在傷兵變數)，建議單場觀望。")
+
+    # --- 🔍 單場深度解析與輸入 ---
+    st.divider()
     selected = st.selectbox("選擇今日比賽深度分析", match_list, format_func=lambda x: x["label"])
 
-    # 顯示核心數據
     col1, col2, col3 = st.columns(3)
     col1.metric(f"🏠 {selected['h_n']}", f"{selected['h_s']:.1f}")
     col2.markdown(f"<h3 style='text-align:center;'>預測讓分: {selected['h_s']-selected['a_s']:.1f}<br>預測總分: {selected['h_s']+selected['a_s']:.1f}</h3>", unsafe_allow_html=True)
     col3.metric(f"✈️ {selected['a_n']}", f"{selected['a_s']:.1f}")
 
-    # 傷兵警告區
-    st.divider()
     if selected["reports"]:
         st.subheader("📋 關鍵傷兵報告")
         for r in selected["reports"]:
@@ -135,20 +180,18 @@ else:
     else:
         st.success("✅ 目前該場次核心主力均正常出賽。")
 
-    # --- 💰 台彩實戰輸入與建議 ---
+    # --- 💰 台彩實戰輸入 ---
     st.divider()
+    st.subheader("📝 運彩即時盤口輸入")
     c_in1, c_in2, c_in3 = st.columns(3)
     with c_in1:
-        u_ml_h = st.number_input("不讓分賠率 (主勝)", value=1.50)
-        u_ml_a = st.number_input("不讓分賠率 (客勝)", value=2.20)
+        u_ml_h = st.number_input("不讓分賠率 (主勝，無則填0)", value=1.50)
+        u_ml_a = st.number_input("不讓分賠率 (客勝，無則填0)", value=2.20)
     with c_in2:
         u_spread = st.number_input("主隊讓分盤口 (如 -8.5)", value=-8.5, step=0.5)
     with c_in3:
         u_total = st.number_input("大小分門檻", value=220.5, step=0.5)
-        u_odd_over = st.number_input("大分賠率", value=1.75)
-        u_odd_under = st.number_input("小分賠率", value=1.75)
 
-    # 決策邏輯
     st.subheader("💡 AI 操盤指令")
     ai_spread = selected['h_s'] - selected['a_s']
     edge = ai_spread - u_spread
@@ -158,7 +201,7 @@ else:
     elif abs(edge) >= 2.5:
         st.info(f"✅ 【小注建議】建議關注 **{'主隊' if edge > 0 else '客隊'}**。")
     else:
-        st.warning("⚖️ 【建議觀望】盤口與 AI 預測接近，建議轉為串關副選。")
+        st.warning("⚖️ 【建議觀望】盤口與 AI 預測接近，建議轉為串關副選或避開。")
     
     if selected["gtd"]:
         st.error("🛌 睡前提醒：本場有核心球員成疑，串關建議注碼減半或避開。")
