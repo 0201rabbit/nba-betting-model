@@ -66,6 +66,11 @@ def get_injury_impact(team_name, raw_text):
 def fetch_nba_master():
     team_dict = {t["id"]: t["full_name"] for t in teams.get_teams()}
     games = scoreboardv2.ScoreboardV2().get_data_frames()[0]
+    
+    # 🌟 V21.2 核心修復：強制過濾 NBA API 傳回的重複賽事
+    if not games.empty and 'GAME_ID' in games.columns:
+        games = games.drop_duplicates(subset=['GAME_ID'])
+        
     s_h = leaguedashteamstats.LeagueDashTeamStats(measure_type_detailed_defense="Advanced", location_nullable="Home").get_data_frames()[0]
     s_a = leaguedashteamstats.LeagueDashTeamStats(measure_type_detailed_defense="Advanced", location_nullable="Road").get_data_frames()[0]
     p_stats = leaguedashplayerstats.LeagueDashPlayerStats(measure_type_detailed_defense="Advanced").get_data_frames()[0]
@@ -90,8 +95,8 @@ def get_bet_recommendation(h_score, a_score):
 # ------------------------
 # 3 主介面
 # ------------------------
-st.set_page_config(page_title="NBA AI 終極實戰 V21.1", page_icon="🏀", layout="wide")
-st.title("🏀 NBA AI 終極實戰 V21.1 (串關攻略回歸)")
+st.set_page_config(page_title="NBA AI 終極實戰 V21.2", page_icon="🏀", layout="wide")
+st.title("🏀 NBA AI 終極實戰 V21.2 (賽事去重修正版)")
 
 with st.spinner("同步 NBA 數據、最新傷兵名單與對位優勢..."):
     t_dict, games_df, s_h, s_a, p_stats = fetch_nba_master()
@@ -130,11 +135,10 @@ else:
             })
         except: continue
 
-    # --- 🎯 串關全攻略面板 (強勢回歸) ---
+    # --- 🎯 串關全攻略面板 ---
     st.divider()
     st.header("🎯 AI 智能串關攻略看板")
     
-    # 嚴格篩選：排除有 GTD (出戰成疑) 的地雷比賽，並按預測分差絕對值排序 (越懸殊越穩)
     safe_games = [m for m in match_list if not m["gtd"]]
     safe_games = sorted(safe_games, key=lambda x: abs(x["h_s"] - x["a_s"]), reverse=True)
     
@@ -155,7 +159,7 @@ else:
             
         with c3:
             st.warning("🛡️ 【鎖盤 / 變盤備案專區】")
-            st.write("若上方推薦的賽事遭遇運彩鎖盤，請優先替換：")
+            st.write("若上方推薦遭遇鎖盤，請替換：")
             if len(safe_games) >= 4:
                 st.write(f"🔹 備案 A: {safe_games[3]['label']} -> **{safe_games[3]['rec_play']}**")
             if len(safe_games) >= 5:
