@@ -6,10 +6,34 @@ from bs4 import BeautifulSoup
 from nba_api.stats.endpoints import leaguedashteamstats, scoreboardv2
 from nba_api.stats.static import teams
 
-st.set_page_config(page_title="NBA 全能操盤手 V8.1", page_icon="🏀", layout="wide")
+st.set_page_config(page_title="NBA 全能操盤手 V8.2", page_icon="🏀", layout="wide")
 
-st.title("🏀 NBA 全能操盤系統 V8.1 (台彩抗鎖盤版)")
+st.title("🏀 NBA 全能操盤系統 V8.2 (台彩抗鎖盤 + 睡前決策版)")
 st.markdown("---")
+
+# --- 0. 中英文隊名對照表 ---
+CHINESE_TRANSLATION = {
+    'Atlanta Hawks': '亞特蘭大老鷹', 'Boston Celtics': '波士頓塞爾提克',
+    'Brooklyn Nets': '布魯克林籃網', 'Charlotte Hornets': '夏洛特黃蜂',
+    'Chicago Bulls': '芝加哥公牛', 'Cleveland Cavaliers': '克里夫蘭騎士',
+    'Dallas Mavericks': '達拉斯獨行俠', 'Denver Nuggets': '丹佛金塊',
+    'Detroit Pistons': '底特律活塞', 'Golden State Warriors': '金州勇士',
+    'Houston Rockets': '休士頓火箭', 'Indiana Pacers': '印第安納溜馬',
+    'LA Clippers': '洛杉磯快艇', 'Los Angeles Clippers': '洛杉磯快艇',
+    'Los Angeles Lakers': '洛杉磯湖人', 'Memphis Grizzlies': '曼菲斯灰熊',
+    'Miami Heat': '邁阿密熱火', 'Milwaukee Bucks': '密爾瓦基公鹿',
+    'Minnesota Timberwolves': '明尼蘇達灰狼', 'New Orleans Pelicans': '紐奧良鵜鶘',
+    'New York Knicks': '紐約尼克', 'Oklahoma City Thunder': '奧克拉荷馬雷霆',
+    'Orlando Magic': '奧蘭多魔術', 'Philadelphia 76ers': '費城76人',
+    'Phoenix Suns': '鳳凰城太陽', 'Portland Trail Blazers': '波特蘭拓荒者',
+    'Sacramento Kings': '沙加緬度國王', 'San Antonio Spurs': '聖安東尼奧馬刺',
+    'Toronto Raptors': '多倫多暴龍', 'Utah Jazz': '猶他爵士',
+    'Washington Wizards': '華盛頓巫師'
+}
+
+def get_display_name(eng_name):
+    ch_name = CHINESE_TRANSLATION.get(eng_name, '')
+    return f"{eng_name} ({ch_name})" if ch_name else eng_name
 
 # --- 1. 核心函數庫 ---
 @st.cache_data(ttl=3600)
@@ -21,13 +45,11 @@ def fetch_nba_data():
     stats_l10 = leaguedashteamstats.LeagueDashTeamStats(measure_type_detailed_defense='Advanced', last_n_games=10).get_data_frames()[0]
     return team_dict, games, stats, stats_l10
 
-def normalize_name(name):
-    if "Clippers" in name: return "LA Clippers"
-    return name
-
 def get_team_metrics(team_name, stats, stats_l10):
     try:
-        mascot = team_name.split()[-1]
+        if "Clippers" in team_name: mascot = "Clippers"
+        else: mascot = team_name.split()[-1]
+        
         row = stats[stats['TEAM_NAME'].str.contains(mascot)].iloc[0]
         row_l10 = stats_l10[stats_l10['TEAM_NAME'].str.contains(mascot)].iloc[0]
         return {
@@ -113,27 +135,29 @@ for _, row in games.iterrows():
     a_m = get_team_metrics(a, stats, stats_l10)
     
     if h_m and a_m:
-        h_mascot = h.split()[-1]
-        a_mascot = a.split()[-1]
+        h_mascot = h.split()[-1] if "Clippers" not in h else "Clippers"
+        a_mascot = a.split()[-1] if "Clippers" not in a else "Clippers"
         h_report, h_penalty = parse_injury_status(h_mascot, injury_text)
         a_report, a_penalty = parse_injury_status(a_mascot, injury_text)
         
-        # 串關嚴選：只挑選沒有重大傷兵疑慮的比賽
+        # 串關嚴選：挑選沒有重大傷兵疑慮的比賽
         if not h_report and not a_report:
             h_score_raw, a_score_raw = predict_score(h_m, a_m)
             prob = calculate_win_prob(h_m, a_m, h_penalty - a_penalty)
             
-            # 計算備案盤口
             adj_spread = h_score_raw - a_score_raw
             adj_total = h_score_raw + a_score_raw
             spread_str = f"主隊 {'+' if adj_spread<0 else '-'}{abs(adj_spread):.1f}"
             
+            # 使用包含中文的隊名
+            disp_h = get_display_name(h)
+            disp_a = get_display_name(a)
+            
             if prob >= 0.65:
-                safe_picks.append({'team': h, 'match': f"{h} vs {a}", 'prob': prob, 'side': '主勝', 'spread': spread_str, 'total': adj_total})
+                safe_picks.append({'team': disp_h, 'match': f"{h} vs {a}", 'prob': prob, 'side': '主勝', 'fair': 1/prob, 'spread': spread_str, 'total': adj_total})
             elif prob <= 0.35:
-                safe_picks.append({'team': a, 'match': f"{h} vs {a}", 'prob': 1-prob, 'side': '客勝', 'spread': spread_str, 'total': adj_total})
+                safe_picks.append({'team': disp_a, 'match': f"{h} vs {a}", 'prob': 1-prob, 'side': '客勝', 'fair': 1/(1-prob), 'spread': spread_str, 'total': adj_total})
 
-# 排序選出最穩的球隊，並確保不重複
 safe_picks = sorted(safe_picks, key=lambda x: x['prob'], reverse=True)
 unique_picks = []
 seen_matches = set()
@@ -144,11 +168,11 @@ for pick in safe_picks:
 
 st.header("🏆 今日嚴選串關與備案推薦")
 if len(unique_picks) >= 2:
-    st.success("✅ 系統已掃描全聯盟，以下為今日最穩健的投注標的，並附上鎖盤備案：")
+    st.success("✅ 系統已掃描全聯盟，排除高風險傷兵後，以下為今日最穩健的投注標的：")
     
     st.subheader("🎯 穩健 2 串 1 推薦")
     for i in range(2):
-        st.markdown(f"**{i+1}️⃣ {unique_picks[i]['team']} ({unique_picks[i]['side']})** - 勝率: {unique_picks[i]['prob']:.1%}")
+        st.markdown(f"**{i+1}️⃣ {unique_picks[i]['team']} ({unique_picks[i]['side']})** - 勝率: {unique_picks[i]['prob']:.1%} | 模型底線: {unique_picks[i]['fair']:.2f}")
         st.caption(f"🔒 **若被鎖盤，備案請看 👉** 【模型預估讓分】：{unique_picks[i]['spread']} ｜ 【預估總分】：{unique_picks[i]['total']:.1f}")
         st.write("")
         
@@ -166,31 +190,34 @@ else:
 
 st.markdown("---")
 
-# --- 4. 🔍 單場深度分析 ---
-st.header("🔍 單場深度分析 (含傷兵期望值修正)")
-game_list = [f"{team_dict.get(row['HOME_TEAM_ID'])} vs {team_dict.get(row['VISITOR_TEAM_ID'])}" for _, row in games.iterrows()]
+# --- 4. 🔍 單場深度分析 (復原 V7.3 的不讓分試算) ---
+st.header("🔍 單場深度分析與賠率試算 (含傷兵修正)")
+game_list = [f"{get_display_name(team_dict.get(row['HOME_TEAM_ID']))} vs {get_display_name(team_dict.get(row['VISITOR_TEAM_ID']))}" for _, row in games.iterrows()]
 selected_game = st.selectbox("請選擇要試算的比賽", game_list)
 
-h_selected = selected_game.split(" vs ")[0]
-a_selected = selected_game.split(" vs ")[1]
+# 還原為純英文以利數據搜尋
+h_selected = selected_game.split(" vs ")[0].split(" (")[0]
+a_selected = selected_game.split(" vs ")[1].split(" (")[0]
 
 h_m = get_team_metrics(h_selected, stats, stats_l10)
 a_m = get_team_metrics(a_selected, stats, stats_l10)
 
 if h_m and a_m:
-    # 🌟 解析主客隊傷勢與扣分
-    h_report, h_penalty = parse_injury_status(h_selected.split()[-1], injury_text)
-    a_report, a_penalty = parse_injury_status(a_selected.split()[-1], injury_text)
+    h_mascot = h_selected.split()[-1] if "Clippers" not in h_selected else "Clippers"
+    a_mascot = a_selected.split()[-1] if "Clippers" not in a_selected else "Clippers"
+    h_report, h_penalty = parse_injury_status(h_mascot, injury_text)
+    a_report, a_penalty = parse_injury_status(a_mascot, injury_text)
     
-    # 計算分數 (套用期望值扣分)
     h_score_raw, a_score_raw = predict_score(h_m, a_m)
+    prob = calculate_win_prob(h_m, a_m, h_penalty - a_penalty)
+    fair_ml = 1 / prob
+    
     h_score_final = h_score_raw - h_penalty
     a_score_final = a_score_raw - a_penalty
     
-    # --- 顯示比分與傷兵狀態 ---
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.metric(label=f"🏠 {h_selected}", value=f"{h_score_final:.1f}")
+        st.metric(label=f"🏠 {get_display_name(h_selected)}", value=f"{h_score_final:.1f}")
         if h_report:
             for r in h_report:
                 if "缺陣" in r: st.error(f"🚨 {r}")
@@ -200,11 +227,12 @@ if h_m and a_m:
         
     with col2:
         st.markdown("<h3 style='text-align: center;'>VS</h3>", unsafe_allow_html=True)
+        st.write(f"📈 模型勝率: **{prob:.1%}**")
         st.write(f"📏 預測讓分: **主隊 {'+' if (h_score_final-a_score_final)<0 else '-'}{abs(h_score_final-a_score_final):.1f}**")
         st.write(f"📊 預測總分: **{h_score_final + a_score_final:.1f}**")
         
     with col3:
-        st.metric(label=f"✈️ {a_selected}", value=f"{a_score_final:.1f}")
+        st.metric(label=f"✈️ {get_display_name(a_selected)}", value=f"{a_score_final:.1f}")
         if a_report:
             for r in a_report:
                 if "缺陣" in r: st.error(f"🚨 {r}")
@@ -212,42 +240,51 @@ if h_m and a_m:
                 else: st.warning(f"⚠️ {r}")
         else: st.success("✅ 主力安全")
 
-    st.markdown("### 📝 台彩盤口輸入與【睡前決策】")
-    col_in1, col_in2 = st.columns(2)
+    st.markdown("### 📝 台彩盤口輸入與實戰建議")
+    col_in1, col_in2, col_in3 = st.columns(3)
     
     with col_in1:
+        tw_ml = st.number_input(f"【不讓分】主隊賠率", value=0.0, step=0.05)
+    with col_in2:
         tw_spread = st.number_input(f"【讓分】主隊讓分值 (如 -5.5)", value=0.0, step=0.5)
+    with col_in3:
         tw_total = st.number_input("【大小分】分界點", value=220.0, step=0.5)
         
-    with col_in2:
-        # 睡前風險提示邏輯
-        has_questionable = any("出戰成疑" in r for r in h_report + a_report)
-        has_out = any("缺陣" in r for r in h_report + a_report)
-        
-        st.markdown("#### 💡 實戰建議")
-        
-        # 讓分判斷
-        adj_spread = h_score_final - a_score_final
-        if tw_spread != 0:
-            if adj_spread > abs(tw_spread) + 2: st.success("✅ **[讓分]** 模型看好主隊強過讓分盤。")
-            elif adj_spread < abs(tw_spread) - 2: st.success("✅ **[讓分]** 模型看好客隊咬住比分，建議買客受讓。")
-            else: st.warning("⚖️ **[讓分]** 盤口精準，建議觀望。")
-            
-        # 大小分判斷
-        adj_total = h_score_final + a_score_final
-        if tw_total > 200:
-            if adj_total > tw_total + 4: st.success(f"🔥 **[大小分]** 預測總分 {adj_total:.1f}，建議買【大分】。")
-            elif adj_total < tw_total - 4: st.success(f"❄️ **[大小分]** 預測總分 {adj_total:.1f}，建議買【小分】。")
-            else: st.warning("⚖️ **[大小分]** 盤口精準，建議觀望。")
-
-        # 🛌 睡前資金控管警告
-        st.markdown("#### 🛌 睡前下注資金建議")
-        if has_questionable:
-            st.error("⚠️ **高變異警告**：有核心主力為「出戰成疑」，明早可能不打。若今晚必須下注，**強烈建議注碼減半**，或直接放掉這場。")
-        elif has_out:
-            st.warning("📉 **傷兵確認**：有主力確定缺陣。模型已重度扣分，只要盤口價值還在，維持正常注碼即可。")
+    st.markdown("#### 💡 系統判定結果")
+    
+    # 🌟 復原 V7.3 不讓分價值判定
+    if tw_ml > 0:
+        if tw_ml >= fair_ml:
+            st.success(f"🔥 **[不讓分] 這是 Value Bet！** 台彩賠率 ({tw_ml}) > 模型底線 ({fair_ml:.2f})，值得單壓或串關！")
         else:
-            st.success("🛡️ **陣容穩定**：目前無重大傷勢疑慮，變數極低。適合今晚安心下注，當作串關主力。")
+            st.error(f"❌ **[不讓分] 賠率太低！** 台彩賠率 ({tw_ml}) < 模型底線 ({fair_ml:.2f})，無投資價值。")
+    elif tw_ml == 0 and tw_spread == 0 and tw_total == 220.0:
+        st.info("ℹ️ 輸入上方盤口賠率以獲取投資建議。")
+
+    # 讓分與大小分判定
+    adj_spread = h_score_final - a_score_final
+    if tw_spread != 0:
+        if adj_spread > abs(tw_spread) + 2: st.success("✅ **[讓分]** 模型看好主隊強過讓分盤。")
+        elif adj_spread < abs(tw_spread) - 2: st.success("✅ **[讓分]** 模型看好客隊咬住比分，建議買客受讓。")
+        else: st.warning("⚖️ **[讓分]** 盤口精準，建議觀望。")
+        
+    adj_total = h_score_final + a_score_final
+    if tw_total > 200 and tw_total != 220.0:
+        if adj_total > tw_total + 4: st.success(f"🔥 **[大小分]** 預測總分 {adj_total:.1f}，建議買【大分】。")
+        elif adj_total < tw_total - 4: st.success(f"❄️ **[大小分]** 預測總分 {adj_total:.1f}，建議買【小分】。")
+        else: st.warning("⚖️ **[大小分]** 盤口精準，建議觀望。")
+
+    # 🛌 保留睡前決策警告
+    st.markdown("#### 🛌 睡前下注資金建議")
+    has_questionable = any("出戰成疑" in r for r in h_report + a_report)
+    has_out = any("缺陣" in r for r in h_report + a_report)
+    
+    if has_questionable:
+        st.error("⚠️ **高變異警告**：有核心主力為「出戰成疑」，明早可能不打。若今晚必須下注，**強烈建議注碼減半**，或直接放掉這場。")
+    elif has_out:
+        st.warning("📉 **傷兵確認**：有主力確定缺陣。模型已重度扣分，只要盤口價值還在，維持正常注碼即可。")
+    else:
+        st.success("🛡️ **陣容穩定**：目前無重大傷勢疑慮，變數極低。適合今晚安心下注，當作串關主力。")
 
 else:
     st.warning("⚠️ 數據不全，無法預測。")
