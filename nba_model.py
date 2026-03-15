@@ -7,7 +7,7 @@ from nba_api.stats.static import teams
 from datetime import datetime, timedelta
 
 # ------------------------
-# 0 隊名與核心球員庫
+# 0 隊名與核心球員中文對照庫
 # ------------------------
 TEAM_CN = {
     "Atlanta Hawks": "老鷹", "Boston Celtics": "塞爾提克", "Brooklyn Nets": "籃網",
@@ -22,17 +22,48 @@ TEAM_CN = {
     "Toronto Raptors": "暴龍", "Utah Jazz": "爵士", "Washington Wizards": "巫師"
 }
 
+# 擴充版核心與主力輪替監控名單
 STAR_PLAYERS = {
-    "Lakers": ["LeBron James", "Anthony Davis"], "Nuggets": ["Nikola Jokic", "Jamal Murray"],
-    "Celtics": ["Jayson Tatum", "Jaylen Brown"], "Mavericks": ["Luka Doncic", "Kyrie Irving"],
-    "Thunder": ["Shai Gilgeous-Alexander", "Chet Holmgren"], "Timberwolves": ["Anthony Edwards", "Rudy Gobert"],
-    "Bucks": ["Giannis Antetokounmpo", "Damian Lillard"], "Suns": ["Kevin Durant", "Devin Booker"],
-    "Warriors": ["Stephen Curry"], "Spurs": ["Victor Wembanyama"], "76ers": ["Joel Embiid", "Tyrese Maxey"],
-    "Cavaliers": ["Donovan Mitchell"], "Knicks": ["Jalen Brunson"]
+    "Lakers": ["LeBron James", "Anthony Davis", "D'Angelo Russell", "Austin Reaves"], 
+    "Nuggets": ["Nikola Jokic", "Jamal Murray", "Aaron Gordon", "Michael Porter Jr."],
+    "Celtics": ["Jayson Tatum", "Jaylen Brown", "Kristaps Porzingis", "Derrick White", "Jrue Holiday"], 
+    "Mavericks": ["Luka Doncic", "Kyrie Irving", "Dereck Lively"],
+    "Thunder": ["Shai Gilgeous-Alexander", "Chet Holmgren", "Jalen Williams"], 
+    "Timberwolves": ["Anthony Edwards", "Rudy Gobert", "Karl-Anthony Towns"],
+    "Bucks": ["Giannis Antetokounmpo", "Damian Lillard", "Khris Middleton"], 
+    "Suns": ["Kevin Durant", "Devin Booker", "Bradley Beal"],
+    "Warriors": ["Stephen Curry", "Draymond Green", "Jonathan Kuminga", "Andrew Wiggins"], 
+    "Spurs": ["Victor Wembanyama", "Devin Vassell"], 
+    "76ers": ["Joel Embiid", "Tyrese Maxey", "Paul George", "Kelly Oubre"], 
+    "Cavaliers": ["Donovan Mitchell", "Darius Garland", "Evan Mobley", "Jarrett Allen"], 
+    "Knicks": ["Jalen Brunson", "Karl-Anthony Towns", "OG Anunoby", "Mikal Bridges"],
+    "Heat": ["Jimmy Butler", "Bam Adebayo", "Tyler Herro"],
+    "Clippers": ["Kawhi Leonard", "James Harden", "Norman Powell"],
+    "Kings": ["De'Aaron Fox", "Domantas Sabonis", "DeMar DeRozan"]
+}
+
+# 球員中文翻譯字典 (對應上方 STAR_PLAYERS)
+PLAYER_CN = {
+    "LeBron James": "詹姆斯", "Anthony Davis": "戴維斯", "D'Angelo Russell": "羅素", "Austin Reaves": "里夫斯",
+    "Nikola Jokic": "約基奇", "Jamal Murray": "莫瑞", "Aaron Gordon": "高登", "Michael Porter Jr.": "小波特",
+    "Jayson Tatum": "塔圖姆", "Jaylen Brown": "布朗", "Kristaps Porzingis": "波辛吉斯", "Derrick White": "懷特", "Jrue Holiday": "哈勒戴",
+    "Luka Doncic": "唐西奇", "Kyrie Irving": "厄文", "Dereck Lively": "萊夫利",
+    "Shai Gilgeous-Alexander": "亞歷山大", "Chet Holmgren": "霍姆格倫", "Jalen Williams": "威廉斯",
+    "Anthony Edwards": "愛德華茲", "Rudy Gobert": "戈貝爾", "Karl-Anthony Towns": "唐斯",
+    "Giannis Antetokounmpo": "字母哥", "Damian Lillard": "里拉德", "Khris Middleton": "米德爾頓",
+    "Kevin Durant": "杜蘭特", "Devin Booker": "布克", "Bradley Beal": "比爾",
+    "Stephen Curry": "柯瑞", "Draymond Green": "格林", "Jonathan Kuminga": "庫明加", "Andrew Wiggins": "威金斯",
+    "Victor Wembanyama": "文班亞馬", "Devin Vassell": "瓦賽爾",
+    "Joel Embiid": "恩比德", "Tyrese Maxey": "馬克西", "Paul George": "喬治", "Kelly Oubre": "烏布瑞",
+    "Donovan Mitchell": "米契爾", "Darius Garland": "葛蘭", "Evan Mobley": "莫布里", "Jarrett Allen": "艾倫",
+    "Jalen Brunson": "布朗森", "OG Anunoby": "阿努諾比", "Mikal Bridges": "布里吉斯",
+    "Jimmy Butler": "巴特勒", "Bam Adebayo": "阿德巴約", "Tyler Herro": "赫洛",
+    "Kawhi Leonard": "雷納德", "James Harden": "哈登", "Norman Powell": "鮑威爾",
+    "De'Aaron Fox": "福克斯", "Domantas Sabonis": "沙波尼斯", "DeMar DeRozan": "德羅展"
 }
 
 # ------------------------
-# 1 數據引擎與傷兵爬蟲
+# 1 數據引擎與傷兵爬蟲 (升級中英雙語顯示)
 # ------------------------
 @st.cache_data(ttl=600)
 def fetch_injury_raw():
@@ -47,18 +78,27 @@ def fetch_injury_raw():
 def get_injury_impact(team_name, raw_text):
     mascot = team_name.split()[-1]
     penalty, reports, has_gtd = 0, [], False
-    if mascot in STAR_PLAYERS:
-        for player in STAR_PLAYERS[mascot]:
+    
+    # 特殊處理名稱匹配
+    search_key = "76ers" if mascot == "76ers" else mascot
+    
+    if search_key in STAR_PLAYERS:
+        for player in STAR_PLAYERS[search_key]:
             last_name = player.split()[-1].lower()
             if last_name in raw_text:
                 idx = raw_text.find(last_name)
                 chunk = raw_text[idx:idx+150]
-                if "out" in chunk:
+                
+                # 取得中文翻譯與隊伍中文
+                p_cn = PLAYER_CN.get(player, "未知")
+                t_cn = TEAM_CN.get(team_name, mascot)
+                
+                if "out" in chunk or "expected to be out" in chunk:
                     penalty += 8.0
-                    reports.append(f"🚨 {player} [確定缺陣 Out]")
+                    reports.append(f"🚨 {player} ({p_cn}) - {t_cn} [確定缺陣 Out]")
                 elif any(word in chunk for word in ["questionable", "gtd", "day-to-day", "decision"]):
                     penalty += 4.0
-                    reports.append(f"⚠️ {player} [出戰成疑 GTD]")
+                    reports.append(f"⚠️ {player} ({p_cn}) - {t_cn} [出戰成疑 GTD]")
                     has_gtd = True
     return penalty, reports, has_gtd
 
@@ -67,7 +107,6 @@ def fetch_nba_master():
     team_dict = {t["id"]: t["full_name"] for t in teams.get_teams()}
     games = scoreboardv2.ScoreboardV2().get_data_frames()[0]
     
-    # 🌟 V21.2 核心修復：強制過濾 NBA API 傳回的重複賽事
     if not games.empty and 'GAME_ID' in games.columns:
         games = games.drop_duplicates(subset=['GAME_ID'])
         
@@ -95,8 +134,8 @@ def get_bet_recommendation(h_score, a_score):
 # ------------------------
 # 3 主介面
 # ------------------------
-st.set_page_config(page_title="NBA AI 終極實戰 V21.2", page_icon="🏀", layout="wide")
-st.title("🏀 NBA AI 終極實戰 V21.2 (賽事去重修正版)")
+st.set_page_config(page_title="NBA AI 終極實戰 V21.3", page_icon="🏀", layout="wide")
+st.title("🏀 NBA AI 終極實戰 V21.3 (傷兵雙語對照版)")
 
 with st.spinner("同步 NBA 數據、最新傷兵名單與對位優勢..."):
     t_dict, games_df, s_h, s_a, p_stats = fetch_nba_master()
