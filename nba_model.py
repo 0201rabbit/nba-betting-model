@@ -7,7 +7,7 @@ from nba_api.stats.static import teams
 from datetime import datetime, timedelta
 
 # ------------------------
-# 0 隊名與核心球員中文對照庫
+# 0 基礎配置與對照庫 (保留原版)
 # ------------------------
 TEAM_CN = {
     "Atlanta Hawks": "老鷹", "Boston Celtics": "塞爾提克", "Brooklyn Nets": "籃網",
@@ -22,7 +22,6 @@ TEAM_CN = {
     "Toronto Raptors": "暴龍", "Utah Jazz": "爵士", "Washington Wizards": "巫師"
 }
 
-# 擴充版核心與主力輪替監控名單
 STAR_PLAYERS = {
     "Lakers": ["LeBron James", "Anthony Davis", "D'Angelo Russell", "Austin Reaves"], 
     "Nuggets": ["Nikola Jokic", "Jamal Murray", "Aaron Gordon", "Michael Porter Jr."],
@@ -42,7 +41,6 @@ STAR_PLAYERS = {
     "Kings": ["De'Aaron Fox", "Domantas Sabonis", "DeMar DeRozan"]
 }
 
-# 球員中文翻譯字典 (對應上方 STAR_PLAYERS)
 PLAYER_CN = {
     "LeBron James": "詹姆斯", "Anthony Davis": "戴維斯", "D'Angelo Russell": "羅素", "Austin Reaves": "里夫斯",
     "Nikola Jokic": "約基奇", "Jamal Murray": "莫瑞", "Aaron Gordon": "高登", "Michael Porter Jr.": "小波特",
@@ -63,7 +61,7 @@ PLAYER_CN = {
 }
 
 # ------------------------
-# 1 數據引擎與傷兵爬蟲 (升級中英雙語顯示)
+# 1 數據引擎 (升級回測抓取)
 # ------------------------
 @st.cache_data(ttl=600)
 def fetch_injury_raw():
@@ -78,21 +76,15 @@ def fetch_injury_raw():
 def get_injury_impact(team_name, raw_text):
     mascot = team_name.split()[-1]
     penalty, reports, has_gtd = 0, [], False
-    
-    # 特殊處理名稱匹配
     search_key = "76ers" if mascot == "76ers" else mascot
-    
     if search_key in STAR_PLAYERS:
         for player in STAR_PLAYERS[search_key]:
             last_name = player.split()[-1].lower()
             if last_name in raw_text:
                 idx = raw_text.find(last_name)
                 chunk = raw_text[idx:idx+150]
-                
-                # 取得中文翻譯與隊伍中文
                 p_cn = PLAYER_CN.get(player, "未知")
                 t_cn = TEAM_CN.get(team_name, mascot)
-                
                 if "out" in chunk or "expected to be out" in chunk:
                     penalty += 8.0
                     reports.append(f"🚨 {player} ({p_cn}) - {t_cn} [確定缺陣 Out]")
@@ -103,52 +95,53 @@ def get_injury_impact(team_name, raw_text):
     return penalty, reports, has_gtd
 
 @st.cache_data(ttl=3600)
-def fetch_nba_master():
+def fetch_nba_master(game_date):
     team_dict = {t["id"]: t["full_name"] for t in teams.get_teams()}
-    games = scoreboardv2.ScoreboardV2().get_data_frames()[0]
+    sb = scoreboardv2.ScoreboardV2(game_date=game_date)
+    games = sb.get_data_frames()[0]
+    line_score = sb.get_data_frames()[1] # 實際比分表
     
-    if not games.empty and 'GAME_ID' in games.columns:
-        games = games.drop_duplicates(subset=['GAME_ID'])
-        
     s_h = leaguedashteamstats.LeagueDashTeamStats(measure_type_detailed_defense="Advanced", location_nullable="Home").get_data_frames()[0]
     s_a = leaguedashteamstats.LeagueDashTeamStats(measure_type_detailed_defense="Advanced", location_nullable="Road").get_data_frames()[0]
     p_stats = leaguedashplayerstats.LeagueDashPlayerStats(measure_type_detailed_defense="Advanced").get_data_frames()[0]
-    return team_dict, games, s_h, s_a, p_stats
+    return team_dict, games, line_score, s_h, s_a, p_stats
 
-# ------------------------
-# 2 智能玩法推薦器
-# ------------------------
 def get_bet_recommendation(h_score, a_score):
     spread = h_score - a_score
     total = h_score + a_score
-    
-    if abs(spread) > 9.0:
-        return f"[不讓分] {'主勝' if spread > 0 else '客勝'}"
-    elif total > 233.0:
-        return "[大小分] 大分"
-    elif total < 212.0:
-        return "[大小分] 小分"
-    else:
-        return f"[讓分] {'主隊' if spread > 0 else '客隊'}"
+    if abs(spread) > 9.0: return f"[不讓分] {'主勝' if spread > 0 else '客勝'}"
+    elif total > 233.0: return "[大小分] 大分"
+    elif total < 212.0: return "[大小分] 小分"
+    else: return f"[讓分] {'主隊' if spread > 0 else '客隊'}"
 
 # ------------------------
-# 3 主介面
+# 2 主介面與回測邏輯
 # ------------------------
-st.set_page_config(page_title="NBA AI 終極實戰 V21.3", page_icon="🏀", layout="wide")
-st.title("🏀 NBA AI 終極實戰 V21.3 (傷兵雙語對照版)")
+st.set_page_config(page_title="NBA AI 終極回測 V22.0", page_icon="🏀", layout="wide")
 
-with st.spinner("同步 NBA 數據、最新傷兵名單與對位優勢..."):
-    t_dict, games_df, s_h, s_a, p_stats = fetch_nba_master()
+# 側邊欄日期選擇
+st.sidebar.header("📅 回測控制台")
+target_date = st.sidebar.date_input("選擇賽事日期", datetime.now() - timedelta(hours=8))
+formatted_date = target_date.strftime('%Y-%m-%d')
+
+st.title(f"🏀 NBA AI 終極實戰 (回測日期: {formatted_date})")
+
+with st.spinner("同步 NBA 數據與歷史比分..."):
+    t_dict, games_df, line_df, s_h, s_a, p_stats = fetch_nba_master(formatted_date)
     raw_inj = fetch_injury_raw()
 
 if games_df.empty:
-    st.info("📅 今日暫無賽程。")
+    st.info(f"📅 {formatted_date} 暫無賽程。")
 else:
-    match_list = []
+    match_data = []
     for _, row in games_df.iterrows():
-        h_n = t_dict.get(row["HOME_TEAM_ID"])
-        a_n = t_dict.get(row["VISITOR_TEAM_ID"])
+        h_id, a_id = row["HOME_TEAM_ID"], row["VISITOR_TEAM_ID"]
+        h_n, a_n = t_dict.get(h_id), t_dict.get(a_id)
         
+        # 抓取實際得分
+        h_actual = line_df[line_df['TEAM_ID'] == h_id]['PTS'].values[0] if not line_df.empty else None
+        a_actual = line_df[line_df['TEAM_ID'] == a_id]['PTS'].values[0] if not line_df.empty else None
+
         h_pen, h_rep, h_gtd = get_injury_impact(h_n, raw_inj)
         a_pen, a_rep, a_gtd = get_injury_impact(a_n, raw_inj)
         
@@ -156,6 +149,7 @@ else:
             h_data = s_h[s_h["TEAM_NAME"] == h_n].iloc[0]
             a_data = s_a[s_a["TEAM_NAME"] == a_n].iloc[0]
             
+            # PIE 獲取邏輯保持原樣
             h_abb = "".join([i[0] for i in h_n.split() if i[0].isupper()])
             a_abb = "".join([i[0] for i in a_n.split() if i[0].isupper()])
             h_pie = p_stats[p_stats["TEAM_ABBREVIATION"] == h_abb]["PIE"].max()
@@ -166,91 +160,45 @@ else:
             h_score = (h_data["OFF_RATING"] * (h_data["PACE"]/100)) + 2.5 - h_pen + h_edge
             a_score = (a_data["OFF_RATING"] * (a_data["PACE"]/100)) - a_pen + a_edge
             
-            match_list.append({
-                "label": f"{a_n} ({TEAM_CN.get(a_n, '未知')}) @ {h_n} ({TEAM_CN.get(h_n, '未知')})",
-                "h_n": h_n, "a_n": a_n, "h_s": h_score, "a_s": a_score,
-                "reports": h_rep + a_rep, "gtd": h_gtd or a_gtd,
-                "rec_play": get_bet_recommendation(h_score, a_score)
+            match_data.append({
+                "組別": f"{TEAM_CN.get(a_n)} @ {TEAM_CN.get(h_n)}",
+                "AI預估(主)": round(h_score, 1),
+                "AI預估(客)": round(a_score, 1),
+                "實際(主)": h_actual,
+                "實際(客)": a_actual,
+                "勝負命中": "✅" if (h_score > a_score and h_actual > a_actual) or (h_score < a_score and h_actual < a_actual) else "❌",
+                "傷兵": "有" if h_rep or a_rep else "無",
+                "建議": get_bet_recommendation(h_score, a_score),
+                "reports": h_rep + a_rep
             })
         except: continue
 
-    # --- 🎯 串關全攻略面板 ---
+    # --- 顯示回測看板 ---
+    st.header("📊 AI 預測 vs 實際結果對照表")
+    df_display = pd.DataFrame(match_data)
+    if not df_display.empty:
+        st.dataframe(df_display.drop(columns=["reports"]), use_container_width=True)
+        
+        # 統計勝率
+        hit_rate = (df_display["勝負命中"] == "✅").mean()
+        st.sidebar.metric("本日 AI 勝負命中率", f"{hit_rate:.1%}")
+    
+    # --- 詳細解析 ---
     st.divider()
-    st.header("🎯 AI 智能串關攻略看板")
+    selected_game = st.selectbox("選擇場次查看詳細分析", match_data, format_func=lambda x: x["組別"])
     
-    safe_games = [m for m in match_list if not m["gtd"]]
-    safe_games = sorted(safe_games, key=lambda x: abs(x["h_s"] - x["a_s"]), reverse=True)
-    
-    if len(safe_games) >= 3:
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            st.success("🔥 【首選 2 串 1】(最穩避雷組合)")
-            st.write(f"1. **{safe_games[0]['label']}**")
-            st.write(f"   👉 建議玩法：**{safe_games[0]['rec_play']}**")
-            st.write(f"2. **{safe_games[1]['label']}**")
-            st.write(f"   👉 建議玩法：**{safe_games[1]['rec_play']}**")
-            
-        with c2:
-            st.info("🚀 【高賠 3 串 1】(要求 3 關專用)")
-            st.write(f"1. {safe_games[0]['label']} ({safe_games[0]['rec_play']})")
-            st.write(f"2. {safe_games[1]['label']} ({safe_games[1]['rec_play']})")
-            st.write(f"3. {safe_games[2]['label']} ({safe_games[2]['rec_play']})")
-            
-        with c3:
-            st.warning("🛡️ 【鎖盤 / 變盤備案專區】")
-            st.write("若上方推薦遭遇鎖盤，請替換：")
-            if len(safe_games) >= 4:
-                st.write(f"🔹 備案 A: {safe_games[3]['label']} -> **{safe_games[3]['rec_play']}**")
-            if len(safe_games) >= 5:
-                st.write(f"🔹 備案 B: {safe_games[4]['label']} -> **{safe_games[4]['rec_play']}**")
-    else:
-        st.warning("⚠️ 今日無足夠安全的比賽進行串關推薦 (多數比賽存在傷兵變數)，建議單場觀望。")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.subheader("📋 傷兵影響報告")
+        if selected_game["reports"]:
+            for r in selected_game["reports"]: st.warning(r)
+        else: st.success("此場次核心球員皆正常出賽")
+        
+    with col2:
+        st.subheader("💡 玩法建議回顧")
+        st.write(f"AI 當時建議：**{selected_game['建議']}**")
+        if selected_game["實際(主)"] is not None:
+            actual_diff = selected_game["實際(主)"] - selected_game["實際(客)"]
+            st.write(f"最終實際分差：**{actual_diff}**")
 
-    # --- 🔍 單場深度解析與輸入 ---
-    st.divider()
-    selected = st.selectbox("選擇今日比賽深度分析", match_list, format_func=lambda x: x["label"])
-
-    col1, col2, col3 = st.columns(3)
-    col1.metric(f"🏠 {selected['h_n']}", f"{selected['h_s']:.1f}")
-    col2.markdown(f"<h3 style='text-align:center;'>預測讓分: {selected['h_s']-selected['a_s']:.1f}<br>預測總分: {selected['h_s']+selected['a_s']:.1f}</h3>", unsafe_allow_html=True)
-    col3.metric(f"✈️ {selected['a_n']}", f"{selected['a_s']:.1f}")
-
-    if selected["reports"]:
-        st.subheader("📋 關鍵傷兵報告")
-        for r in selected["reports"]:
-            if "🚨" in r: st.error(r)
-            else: st.warning(r)
-    else:
-        st.success("✅ 目前該場次核心主力均正常出賽。")
-
-    # --- 💰 台彩實戰輸入 ---
-    st.divider()
-    st.subheader("📝 運彩即時盤口輸入")
-    c_in1, c_in2, c_in3 = st.columns(3)
-    with c_in1:
-        u_ml_h = st.number_input("不讓分賠率 (主勝，無則填0)", value=1.50)
-        u_ml_a = st.number_input("不讓分賠率 (客勝，無則填0)", value=2.20)
-    with c_in2:
-        u_spread = st.number_input("主隊讓分盤口 (如 -8.5)", value=-8.5, step=0.5)
-    with c_in3:
-        u_total = st.number_input("大小分門檻", value=220.5, step=0.5)
-
-    st.subheader("💡 AI 操盤指令")
-    ai_spread = selected['h_s'] - selected['a_s']
-    edge = ai_spread - u_spread
-    
-    # 自動判斷名詞邏輯
-    if edge > 0:
-        action_text = "主隊讓分過盤" if u_spread <= 0 else "主隊受讓過盤"
-    else:
-        action_text = "客隊受讓過盤" if u_spread <= 0 else "客隊讓分過盤"
-
-    if abs(edge) >= 4.5:
-        st.success(f"🔥 【重注建議】預測分差與盤口誤差達 {abs(edge):.1f} 分，適合攻擊 **{action_text}**。")
-    elif abs(edge) >= 2.5:
-        st.info(f"✅ 【小注建議】建議關注 **{action_text}**。")
-    else:
-        st.warning("⚖️ 【建議觀望】盤口與 AI 預測接近，建議轉為串關副選或避開。")
-    
-    if selected["gtd"]:
-        st.error("🛌 睡前提醒：本場有核心球員成疑，串關建議注碼減半或避開。")
+st.info("💡 提示：若選擇今日賽事，'實際比分' 會在比賽結束並官網更新後自動出現。")
