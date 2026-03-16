@@ -68,26 +68,30 @@ def fetch_injury_raw():
 def get_injury_impact(team_name, raw_text): 
     mascot = team_name.split()[-1] 
     penalty, reports, has_gtd = 0, [], False 
+    out_players = [] # 🛡️ V26.0 核心升級：記錄不能上場的球員名單
     search_key = "76ers" if mascot == "76ers" else mascot 
     t_cn = TEAM_CN.get(team_name, team_name) 
     
     if search_key in STAR_PLAYERS: 
         for player in STAR_PLAYERS[search_key]: 
-            last_name = player.split()[-1].lower() 
-            if last_name in raw_text: 
-                idx = raw_text.find(last_name) 
+            # 🛡️ V26.0 核心升級：改用「球員全名」進行字串搜尋，防呆菜市場同姓氏誤殺
+            full_name = player.lower() 
+            if full_name in raw_text: 
+                idx = raw_text.find(full_name) 
                 chunk = raw_text[idx:idx+150] 
                 p_cn = PLAYER_CN.get(player, player) 
                 if "out" in chunk or "expected to be out" in chunk: 
                     penalty += 5.0  
                     reports.append(f"🚨 [{t_cn}] {p_cn} - 確定缺陣") 
+                    out_players.append(player) # 加入剔除名單
                 elif any(word in chunk for word in ["questionable", "gtd", "decision"]): 
                     penalty += 2.5 
                     reports.append(f"⚠️ [{t_cn}] {p_cn} - 出戰成疑(GTD)") 
                     has_gtd = True 
+                    out_players.append(player) # 加入剔除名單
     
     penalty = min(penalty, 8.5) 
-    return penalty, reports, has_gtd 
+    return penalty, reports, has_gtd, out_players 
 
 @st.cache_data(ttl=3600) 
 def fetch_nba_master(game_date_str): 
@@ -119,14 +123,14 @@ def fetch_nba_master(game_date_str):
 # ------------------------ 
 # 2 主介面與實戰分析 
 # ------------------------ 
-st.set_page_config(page_title="NBA AI 攻防大師 V25.4", layout="wide", page_icon="🏀") 
+st.set_page_config(page_title="NBA AI 攻防大師 V26.0", layout="wide", page_icon="🏀") 
 st.sidebar.header("🗓️ 歷史回測與實戰控制") 
 target_date = st.sidebar.date_input("選擇賽事日期", datetime.now() - timedelta(hours=8)) 
 formatted_date = target_date.strftime('%Y-%m-%d') 
 
 st.title(f"🏀 NBA AI 終極分析與回測 ({formatted_date})") 
 
-with st.spinner("極速同步 NBA 數據庫、掃描 B2B 賽程與近期狀態中..."): 
+with st.spinner("極速同步 NBA 數據庫、掃描傷兵狀態與球員活躍名單中..."): 
     t_dict, games_df, line_df, s_h, s_a, p_stats, b2b_teams, s_last5 = fetch_nba_master(formatted_date) 
     raw_inj = fetch_injury_raw() 
 
@@ -151,8 +155,9 @@ else:
             
         is_finished = (h_act > 0 and a_act > 0 and (h_act + a_act) > 150) 
 
-        h_pen, h_rep, h_gtd = get_injury_impact(h_n_en, raw_inj) 
-        a_pen, a_rep, a_gtd = get_injury_impact(a_n_en, raw_inj) 
+        # 🛡️ 提取 4 個變數，包含剔除清單
+        h_pen, h_rep, h_gtd, h_out_players = get_injury_impact(h_n_en, raw_inj) 
+        a_pen, a_rep, a_gtd, a_out_players = get_injury_impact(a_n_en, raw_inj) 
         
         if is_historical: 
             h_pen, a_pen = h_pen * 0.5, a_pen * 0.5 
@@ -192,22 +197,24 @@ else:
             h_base_rating = (h_off * 0.65) + (a_def * 0.35) 
             a_base_rating = (a_off * 0.65) + (h_def * 0.35) 
             
-            h_pie_series = p_stats[p_stats["TEAM_ID"] == h_id]["PIE"]
-            a_pie_series = p_stats[p_stats["TEAM_ID"] == a_id]["PIE"]
-            h_pie = h_pie_series.max() if not h_pie_series.empty else 0
-            a_pie = a_pie_series.max() if not a_pie_series.empty else 0
+            # 🛡️ V26.0 核心升級：動態剔除傷兵的「幽靈 PIE」
+            h_active_stats = p_stats[(p_stats["TEAM_ID"] == h_id) & (~p_stats["PLAYER_NAME"].isin(h_out_players))]
+            a_active_stats = p_stats[(p_stats["TEAM_ID"] == a_id) & (~p_stats["PLAYER_NAME"].isin(a_out_players))]
+            
+            h_pie = h_active_stats["PIE"].max() if not h_active_stats.empty else 0
+            a_pie = a_active_stats["PIE"].max() if not a_active_stats.empty else 0
             
             h_edge = (h_pie - 12) * 0.4 if h_pie > 12 else 0 
             a_edge = (a_pie - 12) * 0.4 if a_pie > 12 else 0 
             
-            # 🎯 V25.4 更新：保留小數點第一位，增加預測顆粒度
+            # 保留小數點第一位
             h_s = round((h_base_rating * (game_pace/100)) + 2.5 - h_pen + h_edge, 1) 
             a_s = round((a_base_rating * (game_pace/100)) - a_pen + a_edge, 1) 
             
             total_est = round(h_s + a_s, 1)
             total_act = h_act + a_act
             
-            # 🎯 V25.4 更新：五五波迴避機制 (差距 <= 1.0 分直接避開)
+            # 五五波迴避機制 (差距 <= 1.0 分直接避開)
             if abs(h_s - a_s) <= 1.0:
                 ai_pick = "⚠️五五波(避開)"
             else:
@@ -216,7 +223,7 @@ else:
             hit = "待定" 
             if is_finished: 
                 if "五五波" in ai_pick:
-                    hit = "無"  # 不計入勝率統計
+                    hit = "無"  
                 else:
                     hit = "✅" if (h_s > a_s and h_act > a_act) or (h_s < a_s and h_act < a_act) else "❌" 
 
@@ -242,7 +249,6 @@ else:
 
     if match_data: 
         done = [m for m in match_data if m["is_finished"]] 
-        # 計算命中率時，排除掉五五波的場次
         done_valid = [m for m in done if m["勝負命中"] in ["✅", "❌"]]
         
         if done_valid: 
@@ -261,7 +267,6 @@ else:
         risky_games = []
         
         for m in match_data:
-            # 🎯 絕對不把五五波的比賽放入任何推薦名單！
             if "五五波" in m["預測勝負"]:
                 continue
                 
@@ -354,4 +359,4 @@ else:
     else: 
         st.warning("🚨 目前抓取不到有效場次進行分析。") 
 
-st.caption("NBA AI V25.4 - 小數點精準預測 & 五五波避險機制")
+st.caption("NBA AI V26.0 - 職業基底：精準傷兵判定 & 動態活躍陣容過濾")
