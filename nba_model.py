@@ -55,7 +55,7 @@ PLAYER_CN = {
 }
 
 # ------------------------
-# 1 傷兵與數據引擎 (加入時光機參數)
+# 1 傷兵與數據引擎 (極速讀取版)
 # ------------------------
 @st.cache_data(ttl=600)
 def fetch_injury_raw():
@@ -87,34 +87,31 @@ def get_injury_impact(team_name, raw_text):
 
 @st.cache_data(ttl=3600)
 def fetch_nba_master(game_date):
-    # 🎯 時光機邏輯：只抓取比賽前一天的數據，避免「未來數據污染過去預測」
-    target_dt = datetime.strptime(game_date, '%Y-%m-%d')
-    date_to_dt = target_dt - timedelta(days=1)
-    date_to_str = date_to_dt.strftime('%m/%d/%Y') # NBA API 需要的格式
-    
     team_dict = {t["id"]: t["full_name"] for t in teams.get_teams()}
+    
+    # 賽程與比分依然綁定日期，確保抓到對的比賽
     sb = scoreboardv2.ScoreboardV2(game_date=game_date)
     games = sb.get_data_frames()[0].drop_duplicates(subset=['GAME_ID'])
     line_score = sb.get_data_frames()[1]
     
-    # 加入 date_to_nullable 鎖定時間點
-    s_h = leaguedashteamstats.LeagueDashTeamStats(measure_type_detailed_defense="Advanced", location_nullable="Home", date_to_nullable=date_to_str).get_data_frames()[0]
-    s_a = leaguedashteamstats.LeagueDashTeamStats(measure_type_detailed_defense="Advanced", location_nullable="Road", date_to_nullable=date_to_str).get_data_frames()[0]
-    p_stats = leaguedashplayerstats.LeagueDashPlayerStats(measure_type_detailed_defense="Advanced", date_to_nullable=date_to_str).get_data_frames()[0]
+    # 🚨 拔除超時參數，恢復極速抓取賽季總平均
+    s_h = leaguedashteamstats.LeagueDashTeamStats(measure_type_detailed_defense="Advanced", location_nullable="Home").get_data_frames()[0]
+    s_a = leaguedashteamstats.LeagueDashTeamStats(measure_type_detailed_defense="Advanced", location_nullable="Road").get_data_frames()[0]
+    p_stats = leaguedashplayerstats.LeagueDashPlayerStats(measure_type_detailed_defense="Advanced").get_data_frames()[0]
     
     return team_dict, games, line_score, s_h, s_a, p_stats
 
 # ------------------------
 # 2 主介面與實戰分析
 # ------------------------
-st.set_page_config(page_title="NBA AI 攻防大師 V24.2", layout="wide", page_icon="🏀")
+st.set_page_config(page_title="NBA AI 攻防大師 V24.3", layout="wide", page_icon="🏀")
 st.sidebar.header("🗓️ 歷史回測與實戰控制")
 target_date = st.sidebar.date_input("選擇賽事日期", datetime.now() - timedelta(hours=8))
 formatted_date = target_date.strftime('%Y-%m-%d')
 
 st.title(f"🏀 NBA AI 終極分析與回測 ({formatted_date})")
 
-with st.spinner("啟動時光機，同步 NBA 歷史數據庫中..."):
+with st.spinner("極速同步 NBA 數據庫與最新傷兵名單中..."):
     t_dict, games_df, line_df, s_h, s_a, p_stats = fetch_nba_master(formatted_date)
     raw_inj = fetch_injury_raw()
 
@@ -127,7 +124,7 @@ else:
         h_n_en, a_n_en = t_dict.get(h_id), t_dict.get(a_id)
         h_n, a_n = TEAM_CN.get(h_n_en, h_n_en), TEAM_CN.get(a_n_en, a_n_en)
         
-        # ⚠️ 核心防崩潰邏輯：安全處理比分，防止 TypeError
+        # ⚠️ 安全處理比分，防止 TypeError
         try:
             h_pts_raw = line_df.loc[line_df['TEAM_ID'] == h_id, 'PTS'].values
             a_pts_raw = line_df.loc[line_df['TEAM_ID'] == a_id, 'PTS'].values
@@ -247,4 +244,4 @@ else:
     else:
         st.warning("🚨 目前抓取不到任何有效場次進行分析，這可能是因為 API 尚未更新今日賽程。")
 
-st.caption("NBA AI V24.2 - 時光機防護版")
+st.caption("NBA AI V24.3 - 極速防當機完整版")
