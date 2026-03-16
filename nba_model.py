@@ -91,29 +91,24 @@ def get_injury_impact(team_name, raw_text):
 
 @st.cache_data(ttl=3600) 
 def fetch_nba_master(game_date_str): 
-    # 日期轉換處理
     game_date_obj = datetime.strptime(game_date_str, '%Y-%m-%d')
-    date_api_format = game_date_obj.strftime('%m/%d/%Y') # NBA API 吃的格式
+    date_api_format = game_date_obj.strftime('%m/%d/%Y') 
     yest_str = (game_date_obj - timedelta(days=1)).strftime('%Y-%m-%d')
 
     team_dict = {t["id"]: t["full_name"] for t in teams.get_teams()} 
     
-    # 1. 抓取當日賽程與比分
     sb = scoreboardv2.ScoreboardV2(game_date=game_date_str) 
     games = sb.get_data_frames()[0].drop_duplicates(subset=['GAME_ID']) 
     line_score = sb.get_data_frames()[1] 
     
-    # 2. 抓取「昨日」賽程，建立背靠背 (B2B) 掃描名單
     sb_yest = scoreboardv2.ScoreboardV2(game_date=yest_str)
     yest_games = sb_yest.get_data_frames()[0]
     b2b_teams = list(yest_games["HOME_TEAM_ID"]) + list(yest_games["VISITOR_TEAM_ID"])
     
-    # 3. 抓取賽季攻防與球員數據
     s_h = leaguedashteamstats.LeagueDashTeamStats(measure_type_detailed_defense="Advanced", location_nullable="Home", date_to_nullable=date_api_format).get_data_frames()[0] 
     s_a = leaguedashteamstats.LeagueDashTeamStats(measure_type_detailed_defense="Advanced", location_nullable="Road", date_to_nullable=date_api_format).get_data_frames()[0] 
     p_stats = leaguedashplayerstats.LeagueDashPlayerStats(measure_type_detailed_defense="Advanced", date_to_nullable=date_api_format).get_data_frames()[0] 
     
-    # 4. 抓取「近 5 場」狀態 (Recent Form)，若 API 逾時則傳回空表
     try:
         s_last5 = leaguedashteamstats.LeagueDashTeamStats(measure_type_detailed_defense="Advanced", last_n_games=5, date_to_nullable=date_api_format).get_data_frames()[0]
     except:
@@ -124,7 +119,7 @@ def fetch_nba_master(game_date_str):
 # ------------------------ 
 # 2 主介面與實戰分析 
 # ------------------------ 
-st.set_page_config(page_title="NBA AI 攻防大師 V25.3", layout="wide", page_icon="🏀") 
+st.set_page_config(page_title="NBA AI 攻防大師 V25.3.1", layout="wide", page_icon="🏀") 
 st.sidebar.header("🗓️ 歷史回測與實戰控制") 
 target_date = st.sidebar.date_input("選擇賽事日期", datetime.now() - timedelta(hours=8)) 
 formatted_date = target_date.strftime('%Y-%m-%d') 
@@ -156,35 +151,31 @@ else:
             
         is_finished = (h_act > 0 and a_act > 0 and (h_act + a_act) > 150) 
 
-        # 基礎傷兵扣分
         h_pen, h_rep, h_gtd = get_injury_impact(h_n_en, raw_inj) 
         a_pen, a_rep, a_gtd = get_injury_impact(a_n_en, raw_inj) 
         
         if is_historical: 
             h_pen, a_pen = h_pen * 0.5, a_pen * 0.5 
 
-        # 🔋 B2B 體力衰退判定
         h_is_b2b = h_id in b2b_teams
         a_is_b2b = a_id in b2b_teams
         
         if h_is_b2b:
-            h_pen += 3.5  # 主場背靠背扣 3.5 分
+            h_pen += 3.5  
             h_rep.append(f"🔋 [{h_n}] 主場背靠背 (體力衰退)")
         if a_is_b2b:
-            a_pen += 4.5  # 客場背靠背更累，扣 4.5 分
+            a_pen += 4.5  
             a_rep.append(f"🔋 [{a_n}] 客場背靠背 (極度疲勞)")
 
         try: 
             h_d = s_h[s_h["TEAM_ID"] == h_id].iloc[0] 
             a_d = s_a[s_a["TEAM_ID"] == a_id].iloc[0] 
             
-            # 🔥 近期狀態 (Last 5) 動態加權
             if not s_last5.empty:
                 h_l5 = s_last5[s_last5["TEAM_ID"] == h_id]
                 a_l5 = s_last5[s_last5["TEAM_ID"] == a_id]
                 
                 if not h_l5.empty and not a_l5.empty:
-                    # 70% 賽季平均 + 30% 近五場狀態
                     h_off = (h_d["OFF_RATING"] * 0.7) + (h_l5.iloc[0]["OFF_RATING"] * 0.3)
                     h_def = (h_d["DEF_RATING"] * 0.7) + (h_l5.iloc[0]["DEF_RATING"] * 0.3)
                     a_off = (a_d["OFF_RATING"] * 0.7) + (a_l5.iloc[0]["OFF_RATING"] * 0.3)
@@ -198,7 +189,6 @@ else:
             
             game_pace = (h_d["PACE"] + a_d["PACE"]) / 2 
             
-            # 使用加權後的攻防計算
             h_base_rating = (h_off * 0.65) + (a_def * 0.35) 
             a_base_rating = (a_off * 0.65) + (h_def * 0.35) 
             
@@ -236,7 +226,7 @@ else:
                 "is_finished": is_finished, 
                 "reports": h_rep + a_rep, 
                 "gtd": h_gtd or a_gtd,
-                "has_b2b": h_is_b2b or a_is_b2b # 標記此場次是否有背靠背球隊
+                "has_b2b": h_is_b2b or a_is_b2b
             }) 
         except Exception as e: 
             continue 
@@ -253,39 +243,50 @@ else:
         st.dataframe(pd.DataFrame(match_data)[["對戰組合", "AI預估(客:主)", "實際比分(客:主)", "AI預估總分", "實際總分", "預測勝負", "勝負命中"]], use_container_width=True) 
 
         st.divider() 
-        st.header("🎯 AI 智能串關推薦 (嚴格剔除高風險變數)") 
+        st.header("🎯 AI 智能推薦引擎 (分級風險控管)") 
         
-        # 🛡️ 升級版推薦邏輯：排除 GTD 傷兵疑慮，並且「排除挑選正在背靠背的球隊」
-        safe_games = []
+        # 🛡️ V25.3.1 分級邏輯：拆分「S級穩膽」與「風險備選」
+        strict_safe_games = []
+        risky_games = []
+        
         for m in match_data:
-            if m["gtd"]: continue
-            # 如果 AI 挑了主勝，但主隊是背靠背，這場就太危險，不放入推薦
-            if m["預測勝負"] == "主勝" and "🔋" in m["對戰組合"].split("@")[1]: continue
-            if m["預測勝負"] == "客勝" and "🔋" in m["對戰組合"].split("@")[0]: continue
-            safe_games.append(m)
-            
-        # 依然依照預估分差排序信心度
-        safe_games = sorted(safe_games, key=lambda x: abs(x["h_s"] - x["a_s"]), reverse=True) 
+            if m["gtd"] or m["has_b2b"]:
+                risky_games.append(m)
+            else:
+                strict_safe_games.append(m)
+                
+        # 兩邊都依照 AI 預估分差來排序信心度
+        strict_safe_games = sorted(strict_safe_games, key=lambda x: abs(x["h_s"] - x["a_s"]), reverse=True) 
+        risky_games = sorted(risky_games, key=lambda x: abs(x["h_s"] - x["a_s"]), reverse=True)
         
-        if len(safe_games) >= 2: 
-            c1, c2 = st.columns(2) 
-            with c1: 
-                st.success("🔥 【首選 2 串 1 組合】(已排除重大傷兵與 B2B 疲勞雷區)") 
-                st.write(f"1. **{safe_games[0]['對戰組合']}** ➡️ 推薦：**{safe_games[0]['預測勝負']}**") 
-                st.write(f"2. **{safe_games[1]['對戰組合']}** ➡️ 推薦：**{safe_games[1]['預測勝負']}**") 
-            
-            with c2: 
-                if len(safe_games) >= 4: 
-                    st.warning("🛡️ 【防鎖盤備用替換庫】") 
-                    st.write(f"備選 A: **{safe_games[2]['對戰組合']}** ➡️ 推薦：**{safe_games[2]['預測勝負']}**") 
-                    st.write(f"備選 B: **{safe_games[3]['對戰組合']}** ➡️ 推薦：**{safe_games[3]['預測勝負']}**") 
-                elif len(safe_games) == 3: 
-                    st.warning("🛡️ 【防鎖盤備用替換庫】") 
-                    st.write(f"備選 A: **{safe_games[2]['對戰組合']}** ➡️ 推薦：**{safe_games[2]['預測勝負']}**") 
-                else: 
-                    st.warning("🛡️ 今日無多餘的高信心備選賽事。") 
-        else: 
-            st.warning("⚠️ 今日安全場次不足 (可能多數球隊面臨背靠背或傷病)，建議單場下注觀望。") 
+        c1, c2 = st.columns(2) 
+        with c1: 
+            st.success("🔥 【S級穩膽】首選推薦 (無傷兵、無背靠背)") 
+            if len(strict_safe_games) >= 2: 
+                st.write(f"1. **{strict_safe_games[0]['對戰組合']}** ➡️ 推薦：**{strict_safe_games[0]['預測勝負']}**") 
+                st.write(f"2. **{strict_safe_games[1]['對戰組合']}** ➡️ 推薦：**{strict_safe_games[1]['預測勝負']}**") 
+            elif len(strict_safe_games) == 1:
+                st.write(f"1. **{strict_safe_games[0]['對戰組合']}** ➡️ 推薦：**{strict_safe_games[0]['預測勝負']}**")
+                st.warning("⚠️ 今日 S 級穩膽僅有一場，無法湊滿穩健的 2 串 1。")
+            else:
+                st.warning("⚠️ 今日無 S 級穩膽 (所有比賽皆有傷兵或體力隱患，請極度謹慎)。")
+
+        with c2: 
+            st.warning("⚠️ 【風險備選庫】次要推薦 (含體力或傷兵變數)") 
+            if len(risky_games) > 0:
+                show_count = min(len(risky_games), 3) # 最多顯示 3 個最高分差的備選
+                for i in range(show_count):
+                    game = risky_games[i]
+                    # 判斷毒點是什麼
+                    risk_tags = []
+                    if game["has_b2b"]: risk_tags.append("🔋背靠背")
+                    if game["gtd"]: risk_tags.append("🚨傷兵疑慮")
+                    risk_label = " + ".join(risk_tags)
+                    
+                    st.write(f"備選 {chr(65+i)}: **{game['對戰組合']}** ➡️ 推薦：**{game['預測勝負']}**")
+                    st.caption(f"*(風險提示: {risk_label})*")
+            else:
+                st.info("今日無備選賽事。")
 
         st.divider() 
         st.header("🔍 單場深度解析與台彩盤口比對") 
@@ -297,7 +298,7 @@ else:
             if s_game["reports"]: 
                 for r in s_game["reports"]: 
                     if "🔋" in r:
-                        st.error(r)  # 背靠背用紅色警告
+                        st.error(r)  
                     else:
                         st.warning(r) 
             else: 
@@ -338,4 +339,4 @@ else:
     else: 
         st.warning("🚨 目前抓取不到有效場次進行分析。") 
 
-st.caption("NBA AI V25.3 - 新增 B2B 疲勞掃描 & 近五場動態權重模組")
+st.caption("NBA AI V25.3.1 - 終極分級風險控管模組")
