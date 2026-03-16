@@ -103,7 +103,7 @@ def fetch_nba_master(game_date):
 # ------------------------
 # 2 主介面與實戰分析
 # ------------------------
-st.set_page_config(page_title="NBA AI 攻防大師 V25.0", layout="wide", page_icon="🏀")
+st.set_page_config(page_title="NBA AI 攻防大師 V25.1", layout="wide", page_icon="🏀")
 st.sidebar.header("🗓️ 歷史回測與實戰控制")
 target_date = st.sidebar.date_input("選擇賽事日期", datetime.now() - timedelta(hours=8))
 formatted_date = target_date.strftime('%Y-%m-%d')
@@ -196,17 +196,35 @@ else:
         st.header("📊 AI 攻防預測 vs 實際結果回測表")
         st.dataframe(pd.DataFrame(match_data)[["對戰組合", "AI預估(客:主)", "實際比分(客:主)", "預測勝負", "勝負命中"]], use_container_width=True)
 
+        # ==========================================
+        # 🎯 V25.1 全新改版：防鎖盤備選串關模組
+        # ==========================================
         st.divider()
-        st.header("🎯 AI 智能串關推薦")
+        st.header("🎯 AI 智能串關推薦 (含防鎖盤備案)")
         safe_games = [m for m in match_data if not m["gtd"]]
         safe_games = sorted(safe_games, key=lambda x: abs(x["h_s"] - x["a_s"]), reverse=True)
         
         if len(safe_games) >= 2:
             c1, c2 = st.columns(2)
-            c1.success("🔥 【首選 2 串 1 組合】(無重大傷兵疑慮)")
-            c1.write(f"1. **{safe_games[0]['對戰組合']}** ➡️ 推薦：**{safe_games[0]['預測勝負']}**")
-            c1.write(f"2. **{safe_games[1]['對戰組合']}** ➡️ 推薦：**{safe_games[1]['預測勝負']}**")
-            c2.info("💡 操盤提示：這兩場預估分差最大，加上模型已調整攻防權重，抗爆冷能力提升。")
+            with c1:
+                st.success("🔥 【首選 2 串 1 組合】(無重大傷兵疑慮)")
+                st.write(f"1. **{safe_games[0]['對戰組合']}** ➡️ 推薦：**{safe_games[0]['預測勝負']}**")
+                st.write(f"2. **{safe_games[1]['對戰組合']}** ➡️ 推薦：**{safe_games[1]['預測勝負']}**")
+                st.info("💡 操盤提示：這兩場預估分差最大，適合做為串關主軸。")
+            
+            with c2:
+                # 若賽程足夠，提供備用替換庫
+                if len(safe_games) >= 4:
+                    st.warning("🛡️ 【防鎖盤備用替換庫】")
+                    st.write("若上述首選賽事遭台彩關盤，請考慮替換以下賽事：")
+                    st.write(f"備選 A: **{safe_games[2]['對戰組合']}** ➡️ 推薦：**{safe_games[2]['預測勝負']}**")
+                    st.write(f"備選 B: **{safe_games[3]['對戰組合']}** ➡️ 推薦：**{safe_games[3]['預測勝負']}**")
+                elif len(safe_games) == 3:
+                    st.warning("🛡️ 【防鎖盤備用替換庫】")
+                    st.write("若上述首選賽事遭台彩關盤，請考慮替換以下賽事：")
+                    st.write(f"備選 A: **{safe_games[2]['對戰組合']}** ➡️ 推薦：**{safe_games[2]['預測勝負']}**")
+                else:
+                    st.warning("🛡️ 今日無多餘的安全備選賽事。")
         else:
             st.warning("⚠️ 今日安全場次不足，建議單場下注觀望。")
 
@@ -242,4 +260,4 @@ else:
     else:
         st.warning("🚨 目前抓取不到有效場次進行分析。")
 
-st.caption("NBA AI V25.0 - 攻防權重校正與扣分天花板保護")
+st.caption("NBA AI V25.1 - 備用替換庫防鎖盤模組")
