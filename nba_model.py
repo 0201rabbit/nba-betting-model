@@ -119,7 +119,7 @@ def fetch_nba_master(game_date_str):
 # ------------------------ 
 # 2 主介面與實戰分析 
 # ------------------------ 
-st.set_page_config(page_title="NBA AI 攻防大師 V25.3.1", layout="wide", page_icon="🏀") 
+st.set_page_config(page_title="NBA AI 攻防大師 V25.4", layout="wide", page_icon="🏀") 
 st.sidebar.header("🗓️ 歷史回測與實戰控制") 
 target_date = st.sidebar.date_input("選擇賽事日期", datetime.now() - timedelta(hours=8)) 
 formatted_date = target_date.strftime('%Y-%m-%d') 
@@ -200,16 +200,25 @@ else:
             h_edge = (h_pie - 12) * 0.4 if h_pie > 12 else 0 
             a_edge = (a_pie - 12) * 0.4 if a_pie > 12 else 0 
             
-            h_s = round((h_base_rating * (game_pace/100)) + 2.5 - h_pen + h_edge) 
-            a_s = round((a_base_rating * (game_pace/100)) - a_pen + a_edge) 
+            # 🎯 V25.4 更新：保留小數點第一位，增加預測顆粒度
+            h_s = round((h_base_rating * (game_pace/100)) + 2.5 - h_pen + h_edge, 1) 
+            a_s = round((a_base_rating * (game_pace/100)) - a_pen + a_edge, 1) 
             
-            total_est = h_s + a_s
+            total_est = round(h_s + a_s, 1)
             total_act = h_act + a_act
             
-            ai_pick = "主勝" if h_s > a_s else "客勝" 
+            # 🎯 V25.4 更新：五五波迴避機制 (差距 <= 1.0 分直接避開)
+            if abs(h_s - a_s) <= 1.0:
+                ai_pick = "⚠️五五波(避開)"
+            else:
+                ai_pick = "主勝" if h_s > a_s else "客勝" 
+            
             hit = "待定" 
             if is_finished: 
-                hit = "✅" if (h_s > a_s and h_act > a_act) or (h_s < a_s and h_act < a_act) else "❌" 
+                if "五五波" in ai_pick:
+                    hit = "無"  # 不計入勝率統計
+                else:
+                    hit = "✅" if (h_s > a_s and h_act > a_act) or (h_s < a_s and h_act < a_act) else "❌" 
 
             match_data.append({ 
                 "對戰組合": f"{'🔋' if a_is_b2b else ''}{a_n} (客) @ {'🔋' if h_is_b2b else ''}{h_n} (主)", 
@@ -233,11 +242,14 @@ else:
 
     if match_data: 
         done = [m for m in match_data if m["is_finished"]] 
-        if done: 
-            rate = sum(1 for m in done if m["勝負命中"] == "✅") / len(done) 
+        # 計算命中率時，排除掉五五波的場次
+        done_valid = [m for m in done if m["勝負命中"] in ["✅", "❌"]]
+        
+        if done_valid: 
+            rate = sum(1 for m in done_valid if m["勝負命中"] == "✅") / len(done_valid) 
             st.sidebar.metric("🎯 本日 AI 勝負命中率", f"{rate:.1%}") 
         else: 
-            st.sidebar.info("⌛ 比賽尚未結束，暫無命中率可統計。") 
+            st.sidebar.info("⌛ 尚無有效預測結果可統計。") 
 
         st.header("📊 AI 攻防預測 vs 實際結果回測表 (🔋代表背靠背)") 
         st.dataframe(pd.DataFrame(match_data)[["對戰組合", "AI預估(客:主)", "實際比分(客:主)", "AI預估總分", "實際總分", "預測勝負", "勝負命中"]], use_container_width=True) 
@@ -245,17 +257,19 @@ else:
         st.divider() 
         st.header("🎯 AI 智能推薦引擎 (分級風險控管)") 
         
-        # 🛡️ V25.3.1 分級邏輯：拆分「S級穩膽」與「風險備選」
         strict_safe_games = []
         risky_games = []
         
         for m in match_data:
+            # 🎯 絕對不把五五波的比賽放入任何推薦名單！
+            if "五五波" in m["預測勝負"]:
+                continue
+                
             if m["gtd"] or m["has_b2b"]:
                 risky_games.append(m)
             else:
                 strict_safe_games.append(m)
                 
-        # 兩邊都依照 AI 預估分差來排序信心度
         strict_safe_games = sorted(strict_safe_games, key=lambda x: abs(x["h_s"] - x["a_s"]), reverse=True) 
         risky_games = sorted(risky_games, key=lambda x: abs(x["h_s"] - x["a_s"]), reverse=True)
         
@@ -263,27 +277,26 @@ else:
         with c1: 
             st.success("🔥 【S級穩膽】首選推薦 (無傷兵、無背靠背)") 
             if len(strict_safe_games) >= 2: 
-                st.write(f"1. **{strict_safe_games[0]['對戰組合']}** ➡️ 推薦：**{strict_safe_games[0]['預測勝負']}**") 
-                st.write(f"2. **{strict_safe_games[1]['對戰組合']}** ➡️ 推薦：**{strict_safe_games[1]['預測勝負']}**") 
+                st.write(f"1. **{strict_safe_games[0]['對戰組合']}** ➡️ 推薦：**{strict_safe_games[0]['預測勝負']}** (預估分差: {abs(strict_safe_games[0]['h_s'] - strict_safe_games[0]['a_s']):.1f}分)") 
+                st.write(f"2. **{strict_safe_games[1]['對戰組合']}** ➡️ 推薦：**{strict_safe_games[1]['預測勝負']}** (預估分差: {abs(strict_safe_games[1]['h_s'] - strict_safe_games[1]['a_s']):.1f}分)") 
             elif len(strict_safe_games) == 1:
                 st.write(f"1. **{strict_safe_games[0]['對戰組合']}** ➡️ 推薦：**{strict_safe_games[0]['預測勝負']}**")
                 st.warning("⚠️ 今日 S 級穩膽僅有一場，無法湊滿穩健的 2 串 1。")
             else:
-                st.warning("⚠️ 今日無 S 級穩膽 (所有比賽皆有傷兵或體力隱患，請極度謹慎)。")
+                st.warning("⚠️ 今日無 S 級穩膽 (所有比賽皆有風險或為五五波)。")
 
         with c2: 
             st.warning("⚠️ 【風險備選庫】次要推薦 (含體力或傷兵變數)") 
             if len(risky_games) > 0:
-                show_count = min(len(risky_games), 3) # 最多顯示 3 個最高分差的備選
+                show_count = min(len(risky_games), 3) 
                 for i in range(show_count):
                     game = risky_games[i]
-                    # 判斷毒點是什麼
                     risk_tags = []
                     if game["has_b2b"]: risk_tags.append("🔋背靠背")
                     if game["gtd"]: risk_tags.append("🚨傷兵疑慮")
                     risk_label = " + ".join(risk_tags)
                     
-                    st.write(f"備選 {chr(65+i)}: **{game['對戰組合']}** ➡️ 推薦：**{game['預測勝負']}**")
+                    st.write(f"備選 {chr(65+i)}: **{game['對戰組合']}** ➡️ 推薦：**{game['預測勝負']}** (預估分差: {abs(game['h_s'] - game['a_s']):.1f}分)")
                     st.caption(f"*(風險提示: {risk_label})*")
             else:
                 st.info("今日無備選賽事。")
@@ -309,14 +322,16 @@ else:
             u_spread = st.number_input(f"請輸入開給【{s_game['h_name']}】的讓分 (例: -4.5)", value=-4.5, step=0.5) 
             u_total = st.number_input(f"請輸入大小分總分盤口 (例: 225.5)", value=225.5, step=0.5) 
             
-            ai_diff = s_game['h_s'] - s_game['a_s'] 
-            edge = ai_diff - u_spread 
+            ai_diff = round(s_game['h_s'] - s_game['a_s'], 1)
+            edge = round(ai_diff - u_spread, 1)
             
             st.write(f"▶️ **AI 預估主隊淨勝分：** `{ai_diff}` 分") 
             st.write(f"▶️ **台彩主隊讓分值：** `{u_spread}` 分") 
             st.write(f"▶️ **讓分盤口優勢差 (Edge)：** `{edge}` 分") 
             
-            if edge >= 4.0: 
+            if "五五波" in s_game["預測勝負"]:
+                st.error("🚨 AI 判定本場實力極度接近 (差距 <= 1分)，強烈建議避開讓分盤！")
+            elif edge >= 4.0: 
                 st.success(f"🔥 強烈推薦：**{s_game['h_name']} (主) 過盤**！") 
             elif edge <= -4.0: 
                 st.success(f"🔥 強烈推薦：**{s_game['a_name']} (客) 過盤**！") 
@@ -325,18 +340,18 @@ else:
                 
             st.divider()
             
-            total_edge = s_game['total_est'] - u_total
+            total_edge = round(s_game['total_est'] - u_total, 1)
             st.write(f"▶️ **AI 預估總分：** `{s_game['total_est']}` 分")
             st.write(f"▶️ **台彩大小分盤口：** `{u_total}` 分")
             
             if total_edge >= 5.0:
-                st.success(f"🔥 大分推薦：AI預估高出盤口 `{total_edge:.1f}` 分！")
+                st.success(f"🔥 大分推薦：AI預估高出盤口 `{total_edge}` 分！")
             elif total_edge <= -5.0:
-                st.success(f"🔥 小分推薦：AI預估低於盤口 `{abs(total_edge):.1f}` 分！")
+                st.success(f"🔥 小分推薦：AI預估低於盤口 `{abs(total_edge)}` 分！")
             else:
                 st.warning("⚖️ 總分預估與盤口接近，建議避開大小分。")
                 
     else: 
         st.warning("🚨 目前抓取不到有效場次進行分析。") 
 
-st.caption("NBA AI V25.3.1 - 終極分級風險控管模組")
+st.caption("NBA AI V25.4 - 小數點精準預測 & 五五波避險機制")
