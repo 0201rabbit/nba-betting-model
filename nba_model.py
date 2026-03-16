@@ -22,7 +22,6 @@ TEAM_CN = {
     "Toronto Raptors": "暴龍", "Utah Jazz": "爵士", "Washington Wizards": "巫師" 
 } 
 
-# 🛡️ V28.0 新增：球隊地理分區 (用於計算長途飛行疲勞)
 TEAM_ZONE = {
     "Atlanta Hawks": "East", "Boston Celtics": "East", "Brooklyn Nets": "East",
     "Charlotte Hornets": "East", "Chicago Bulls": "East", "Cleveland Cavaliers": "East",
@@ -36,7 +35,6 @@ TEAM_ZONE = {
     "Sacramento Kings": "West", "San Antonio Spurs": "West", "Utah Jazz": "West"
 }
 
-# 🛡️ V28.0 新增：The Odds API 隊名對照表 (解決 API 之間命名不一致)
 ODDS_API_TEAMS = {
     "Atlanta Hawks": "Atlanta Hawks", "Boston Celtics": "Boston Celtics", "Brooklyn Nets": "Brooklyn Nets",
     "Charlotte Hornets": "Charlotte Hornets", "Chicago Bulls": "Chicago Bulls", "Cleveland Cavaliers": "Cleveland Cavaliers",
@@ -135,7 +133,6 @@ def fetch_nba_master(game_date_str):
     sb_yest = scoreboardv2.ScoreboardV2(game_date=yest_str)
     yest_games = sb_yest.get_data_frames()[0]
     
-    # 🛡️ V28.0 改良：不僅要知道誰昨天有打，還要知道昨天是在「主場」還是「客場」打
     b2b_data = {}
     for _, y_row in yest_games.iterrows():
         b2b_data[y_row["HOME_TEAM_ID"]] = "Home"
@@ -143,6 +140,7 @@ def fetch_nba_master(game_date_str):
     
     s_h = leaguedashteamstats.LeagueDashTeamStats(measure_type_detailed_defense="Advanced", location_nullable="Home", date_to_nullable=date_api_format).get_data_frames()[0] 
     s_a = leaguedashteamstats.LeagueDashTeamStats(measure_type_detailed_defense="Advanced", location_nullable="Road", date_to_nullable=date_api_format).get_data_frames()[0] 
+    # 增加返回球員的上場時間 (MIN) 以便後續加權計算
     p_stats = leaguedashplayerstats.LeagueDashPlayerStats(measure_type_detailed_defense="Advanced", date_to_nullable=date_api_format).get_data_frames()[0] 
     
     try:
@@ -152,8 +150,7 @@ def fetch_nba_master(game_date_str):
 
     return team_dict, games, line_score, s_h, s_a, p_stats, b2b_data, s_last5
 
-# 🛡️ V28.0 新增：自動抓取即時盤口
-@st.cache_data(ttl=900) # 每15分鐘更新一次盤口
+@st.cache_data(ttl=900) 
 def fetch_live_odds(api_key):
     if not api_key: return {}
     try:
@@ -169,7 +166,6 @@ def fetch_live_odds(api_key):
             
             for m in markets:
                 if m['key'] == 'spreads':
-                    # 抓取主隊的讓分盤口
                     for outcome in m['outcomes']:
                         if outcome['name'] == home: spread_val = outcome['point']
                 elif m['key'] == 'totals':
@@ -180,23 +176,35 @@ def fetch_live_odds(api_key):
     except:
         return {}
 
+# 🛡️ V29.0 核心升級：計算時間加權的前5名 PIE
+def calculate_weighted_pie(p_stats_df, team_id, out_players):
+    active_players = p_stats_df[(p_stats_df["TEAM_ID"] == team_id) & (~p_stats_df["PLAYER_NAME"].isin(out_players))]
+    # 過濾上場時間過少的垃圾時間數據
+    core_players = active_players[active_players["MIN"] > 15] 
+    if core_players.empty:
+        return 0
+    # 取 PIE 最高的前5名核心球員
+    top5 = core_players.nlargest(5, 'PIE')
+    # 計算時間加權 PIE (PIE * MIN 的總和 / MIN 的總和)
+    weighted_pie = (top5['PIE'] * top5['MIN']).sum() / top5['MIN'].sum()
+    return weighted_pie
+
 # ------------------------ 
 # 2 主介面與實戰分析 
 # ------------------------ 
-st.set_page_config(page_title="NBA AI 攻防大師 V28.0", layout="wide", page_icon="🏀") 
+st.set_page_config(page_title="NBA AI 攻防大師 V29.0", layout="wide", page_icon="🏀") 
 st.sidebar.header("🗓️ 歷史回測與實戰控制") 
 target_date = st.sidebar.date_input("選擇賽事日期", datetime.now() - timedelta(hours=8)) 
 formatted_date = target_date.strftime('%Y-%m-%d') 
 
-# 🛡️ V28.0 新增：API Key 輸入區
 st.sidebar.divider()
 st.sidebar.markdown("### 🤖 自動化盤口分析")
-st.sidebar.caption("前往 [The Odds API](https://the-odds-api.com/) 點擊 'Get a Free API Key' 即可每月免費掃描 500 次最新盤口。")
+st.sidebar.caption("前往 The Odds API 獲取免費金鑰。")
 api_key = st.sidebar.text_input("輸入 API 金鑰 (選填)", type="password")
 
 st.title(f"🏀 NBA AI 終極分析與回測 ({formatted_date})") 
 
-with st.spinner("極速同步 NBA 數據庫、運算疲勞度與自動化盤口中..."): 
+with st.spinner("極速同步 NBA 數據庫、運算回歸均值與時間加權影響力中..."): 
     t_dict, games_df, line_df, s_h, s_a, p_stats, b2b_data, s_last5 = fetch_nba_master(formatted_date) 
     raw_inj = fetch_injury_raw() 
     live_odds = fetch_live_odds(api_key) if target_date == (datetime.now() - timedelta(hours=8)).date() else {}
@@ -232,22 +240,18 @@ else:
         a_is_b2b = a_id in b2b_data
         has_fatigue = h_is_b2b or a_is_b2b
         
-        # 🛡️ V28.0 核心升級：精準計算長途客場疲勞 (Travel Fatigue)
         if h_is_b2b:
             h_pen += 3.5  
             h_rep.append(f"🔋 [{h_n}] 主場背靠背 (體能下滑)")
         if a_is_b2b:
-            # 判斷昨天是在哪打的
             yest_loc = b2b_data[a_id]
             if yest_loc == "Away":
-                # 連續兩天客場奔波
                 a_pen += 5.5
                 a_rep.append(f"✈️ [{a_n}] 連續客場背靠背 (嚴重飛行疲勞)")
             else:
                 a_pen += 4.0
                 a_rep.append(f"🔋 [{a_n}] 客場背靠背 (體能下滑)")
 
-            # 跨時區懲罰 (簡易版：東區飛西區)
             if TEAM_ZONE.get(a_n_en) != TEAM_ZONE.get(h_n_en):
                 a_pen += 1.5
                 a_rep.append(f"🌎 [{a_n}] 跨區時差作戰 (疲勞加劇)")
@@ -261,9 +265,19 @@ else:
                 a_l5 = s_last5[s_last5["TEAM_ID"] == a_id]
                 
                 if not h_l5.empty and not a_l5.empty:
-                    h_off = (h_d["OFF_RATING"] * 0.7) + (h_l5.iloc[0]["OFF_RATING"] * 0.3)
+                    # 🛡️ V29.0 核心升級：進攻效率抑制器 (回歸均值)
+                    # 主隊檢查
+                    h_l5_off = h_l5.iloc[0]["OFF_RATING"]
+                    if h_l5_off > h_d["OFF_RATING"] * 1.08:
+                        h_l5_off = h_d["OFF_RATING"] * 1.05 # 強制下修
+                    # 客隊檢查
+                    a_l5_off = a_l5.iloc[0]["OFF_RATING"]
+                    if a_l5_off > a_d["OFF_RATING"] * 1.08:
+                        a_l5_off = a_d["OFF_RATING"] * 1.05 # 強制下修
+                    
+                    h_off = (h_d["OFF_RATING"] * 0.7) + (h_l5_off * 0.3)
                     h_def = (h_d["DEF_RATING"] * 0.7) + (h_l5.iloc[0]["DEF_RATING"] * 0.3)
-                    a_off = (a_d["OFF_RATING"] * 0.7) + (a_l5.iloc[0]["OFF_RATING"] * 0.3)
+                    a_off = (a_d["OFF_RATING"] * 0.7) + (a_l5_off * 0.3)
                     a_def = (a_d["DEF_RATING"] * 0.7) + (a_l5.iloc[0]["DEF_RATING"] * 0.3)
                 else:
                     h_off, h_def = h_d["OFF_RATING"], h_d["DEF_RATING"]
@@ -283,11 +297,9 @@ else:
             a_win_pct = a_d["W_PCT"]
             elo_edge = (h_win_pct - a_win_pct) * 4.5 
             
-            h_active_stats = p_stats[(p_stats["TEAM_ID"] == h_id) & (~p_stats["PLAYER_NAME"].isin(h_out_players))]
-            a_active_stats = p_stats[(p_stats["TEAM_ID"] == a_id) & (~p_stats["PLAYER_NAME"].isin(a_out_players))]
-            
-            h_pie = h_active_stats["PIE"].max() if not h_active_stats.empty else 0
-            a_pie = a_active_stats["PIE"].max() if not a_active_stats.empty else 0
+            # 🛡️ V29.0 核心升級：調用新的上場時間加權 PIE 計算函數
+            h_pie = calculate_weighted_pie(p_stats, h_id, h_out_players)
+            a_pie = calculate_weighted_pie(p_stats, a_id, a_out_players)
             
             h_edge = (h_pie - 12) * 0.4 if h_pie > 12 else 0 
             a_edge = (a_pie - 12) * 0.4 if a_pie > 12 else 0 
@@ -299,7 +311,6 @@ else:
             total_act = h_act + a_act
             ai_diff = round(h_s - a_s, 1)
 
-            # 🛡️ V28.0 新增：自動配對市場盤口並計算 Edge
             api_team_name = ODDS_API_TEAMS.get(h_n_en)
             market_spread = None
             market_edge = None
@@ -312,7 +323,6 @@ else:
                 ai_pick = "⚠️五五波(避開)"
             else:
                 if market_edge is not None:
-                    # 如果有接 API，用 Edge 來決定強烈推薦方向
                     if market_edge >= 4.0: ai_pick = f"主勝 (Edge: +{market_edge})"
                     elif market_edge <= -4.0: ai_pick = f"客勝 (Edge: {abs(market_edge)})"
                     else: ai_pick = "無顯著優勢"
@@ -355,7 +365,6 @@ else:
             st.sidebar.info("⌛ 尚無有效預測結果可統計。") 
 
         st.header("📊 AI 攻防預測 vs 市場盤口分析") 
-        # 顯示重點欄位
         display_df = pd.DataFrame(match_data)[["對戰組合", "AI淨勝分(客:主)", "市場讓分(主)", "預測與盤口優勢", "實際比分", "勝負命中"]]
         st.dataframe(display_df, use_container_width=True) 
 
@@ -458,4 +467,4 @@ else:
     else: 
         st.warning("🚨 目前抓取不到有效場次進行分析。") 
 
-st.caption("NBA AI V28.0 - 終極職業版：長途飛行疲勞演算 & 自動化盤口 API 串接")
+st.caption("NBA AI V29.0 - 職業洗膛版：PIE時間加權 & 三分回歸均值")
